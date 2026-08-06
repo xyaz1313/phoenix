@@ -197,17 +197,25 @@ def _route(request: dict, **context) -> dict | None:
             new_model, candidate_provider = resolve_candidate(
                 tier_override, default_model, _model_health
             )
-            if (
-                candidate_provider is not None
-                and current_provider
-                and candidate_provider != current_provider
-            ):
-                logger.warning(
-                    "phoenix_v7 router: 候选模型 %s 声明属于 provider=%s，"
-                    "跟当前 provider=%s 不一致，跳过改写，保留原模型 %s",
-                    new_model, candidate_provider, current_provider, default_model,
+            if new_model != default_model:
+                # 2026-08-05修正：改写前必须能正向确认"候选模型属于当前请求的 provider"，
+                # 而不是只在"两边都存在且不一致"时才拦截。候选没声明 provider（旧
+                # string/list 格式）、或者当前请求 provider 本身缺失，都属于"归属无法
+                # 确认"，跟"确认了但不一致"一样必须保留原模型——真实审计报告指出的
+                # 根因就是这里以前默认放行"不确定"的情况，导致候选模型可能被发去
+                # 错误的 provider 端点。
+                provider_confirmed = (
+                    candidate_provider is not None
+                    and bool(current_provider)
+                    and candidate_provider == current_provider
                 )
-                new_model = default_model
+                if not provider_confirmed:
+                    logger.warning(
+                        "phoenix_v7 router: 候选模型 %s 的 provider 归属无法确认"
+                        "（候选声明=%s，当前请求 provider=%s），跳过改写，保留原模型 %s",
+                        new_model, candidate_provider, current_provider or "(缺失)", default_model,
+                    )
+                    new_model = default_model
         if session_id:
             _resolved_model_by_session[session_id] = new_model
 

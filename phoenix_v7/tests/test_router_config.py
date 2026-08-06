@@ -79,6 +79,29 @@ def test_write_enabled_upgrades_old_flat_format_without_losing_data():
         assert data["tiers"] == {"l2_deep": "smart-model"}
 
 
+def test_write_enabled_upgrades_old_flat_format_keeps_list_and_dict_values():
+    # 2026-08-05修正：以前升级旧格式时只保留 isinstance(v, str) 的值，list（候选链）
+    # 和 dict（provider 归属声明）会被静默丢弃。真实审计报告指出的问题。
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "tiers.json"
+        path.write_text(
+            json.dumps({
+                "l1_simple": "cheap-model",
+                "l2_deep": ["candidate-a", "candidate-b"],
+                "l3_critical": {"model": "careful-model", "provider": "nous"},
+            }),
+            encoding="utf-8",
+        )
+        write_enabled(False, path=path)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert data["enabled"] is False
+        assert data["tiers"] == {
+            "l1_simple": "cheap-model",
+            "l2_deep": ["candidate-a", "candidate-b"],
+            "l3_critical": {"model": "careful-model", "provider": "nous"},
+        }
+
+
 def test_write_enabled_on_new_format_only_changes_enabled_field():
     with tempfile.TemporaryDirectory() as d:
         path = Path(d) / "tiers.json"

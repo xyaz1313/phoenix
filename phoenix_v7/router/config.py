@@ -87,7 +87,10 @@ def write_enabled(enabled: bool, path: Path | None = None) -> None:
             data = {}
 
     if "tiers" not in data or not isinstance(data.get("tiers"), dict):
-        old_tiers = {k: v for k, v in data.items() if isinstance(v, str)}
+        # 2026-08-05修正：以前这里只保留 isinstance(v, str) 的值，升级时会静默丢弃
+        # 候选链（list）和 provider 归属声明（dict）格式的档位配置。改用跟
+        # load_tier_overrides() 同一份合法性判断，三种格式都保留。
+        old_tiers = {k: v for k, v in data.items() if _is_valid_tier_value(v)}
         data = {"tiers": old_tiers}
 
     data["enabled"] = enabled
@@ -103,13 +106,12 @@ def resolve_candidate(
     """把 tiers.json 里某个档位的配置值解析成 (实际要用的模型字符串, 这个候选声明
     的 provider —— 没声明就是 None)。
 
-    字符串/列表格式（旧格式）不带 provider 信息，返回的 provider 固定是 None——
-    调用方（_route()）看到 None 代表"这个候选没告诉我们它属于哪个 provider"，按
-    现状兼容处理（不因为缺失就拦截，否则所有存量配置一升级就集体失效，参考本文件
-    其它格式升级一贯遵守的"不能让用户被动改变行为"原则）；只有候选明确声明了
-    provider 且跟当前 provider 不一致时才拦截。dict 格式
-    {"model": "...", "provider": "..."} 才是新格式，显式声明归属，才吃得到这层
-    保护——这是渐进式的opt-in，不是强制迁移。
+    字符串/列表格式（旧格式）不带 provider 信息，返回的 provider 固定是 None。
+    2026-08-05修正：_route() 现在把 provider=None 当成"归属无法确认"，会跳过改写、
+    保留原模型（不再是"缺失就放行"）——旧格式配置升级后不会再实际切换模型，直到
+    用户把对应档位改成 dict 格式 {"model": "...", "provider": "..."} 显式声明归属。
+    这是真实审计报告指出的问题：以前默认放行"不确定归属"的候选，可能把模型请求
+    发去它并不属于的 provider。
 
     候选链（列表）格式目前只支持纯字符串，不支持列表里混 dict——链式候选场景本来
     就是给"同一个 provider 下的模型故障转移"设计的，加 provider 归属校验的收益

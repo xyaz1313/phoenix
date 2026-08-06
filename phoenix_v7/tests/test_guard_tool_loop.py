@@ -1,14 +1,5 @@
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path.home() / ".hermes" / "hermes-agent"))
-from hermes_constants import get_hermes_home
-
-sys.path.insert(0, str(get_hermes_home() / "hermes-agent"))
-sys.path.insert(0, str(get_hermes_home() / "plugins"))
 
 import phoenix_v7
-
 
 def test_guard_tool_flags_checkpoint_reminder_when_destructive_and_disabled(monkeypatch):
     # 新行为（事前拦截）：checkpoints 未开 + 高危调用 -> _guard_tool 直接返回
@@ -21,20 +12,17 @@ def test_guard_tool_flags_checkpoint_reminder_when_destructive_and_disabled(monk
     assert result["rule_key"] == "phoenix_v7_checkpoint_reminder"
     assert "即将执行高危操作" in result["message"]
 
-
 def test_guard_tool_does_not_flag_when_checkpoints_already_enabled(monkeypatch):
     monkeypatch.setattr(phoenix_v7, "is_checkpoints_enabled", lambda: True)
     phoenix_v7._checkpoint_reminder_warned_sessions.discard("ckpt-2")
     result = phoenix_v7._guard_tool("write_file", {"path": "/tmp/x.py"}, session_id="ckpt-2")
     assert result is None or result.get("rule_key") != "phoenix_v7_checkpoint_reminder"
 
-
 def test_guard_tool_does_not_flag_for_non_destructive_call(monkeypatch):
     monkeypatch.setattr(phoenix_v7, "is_checkpoints_enabled", lambda: False)
     phoenix_v7._checkpoint_reminder_warned_sessions.discard("ckpt-3")
     result = phoenix_v7._guard_tool("terminal", {"command": "ls -la"}, session_id="ckpt-3")
     assert result is None or result.get("rule_key") != "phoenix_v7_checkpoint_reminder"
-
 
 def test_guard_tool_checkpoint_reminder_only_fires_once_per_session(monkeypatch):
     # 同一 session 里，第二次高危调用不该重复提醒（用 _checkpoint_reminder_warned_sessions
@@ -46,18 +34,15 @@ def test_guard_tool_checkpoint_reminder_only_fires_once_per_session(monkeypatch)
     second = phoenix_v7._guard_tool("write_file", {"path": "/tmp/y.py"}, session_id="ckpt-4")
     assert second is None or second.get("rule_key") != "phoenix_v7_checkpoint_reminder"
 
-
 def _patch_goal(monkeypatch, *, active: bool, created_at: float = 100.0, seeded: bool = False):
     monkeypatch.setattr(phoenix_v7, "_is_goal_active", lambda session_id: active)
     monkeypatch.setattr(phoenix_v7, "_goal_created_at", lambda session_id: created_at if active else None)
     monkeypatch.setattr(phoenix_v7, "_is_checklist_seeded", lambda session_id, goal_created_at: seeded)
 
-
 def test_guard_tool_blocks_non_whitelisted_tool_when_loop_active_unseeded(monkeypatch):
     _patch_goal(monkeypatch, active=True, seeded=False)
     result = phoenix_v7._guard_tool("terminal", {}, session_id="sess-loop-1")
     assert result["rule_key"] == "phoenix_v7_loop_checklist_required"
-
 
 def test_guard_tool_allows_todo_and_marks_seeded(monkeypatch):
     _patch_goal(monkeypatch, active=True, created_at=100.0, seeded=False)
@@ -70,20 +55,17 @@ def test_guard_tool_allows_todo_and_marks_seeded(monkeypatch):
     assert result is None
     assert seeded_calls == [("sess-loop-2", 100.0)]
 
-
 def test_guard_tool_no_active_loop_unaffected(monkeypatch):
     _patch_goal(monkeypatch, active=False)
     phoenix_v7._last_tier_by_session["sess-no-loop"] = "l1_daily"
     result = phoenix_v7._guard_tool("terminal", {}, session_id="sess-no-loop")
     assert result is None
 
-
 def test_guard_tool_loop_active_seeded_high_tier_blocks_for_evaluator(monkeypatch):
     _patch_goal(monkeypatch, active=True, seeded=True)
     phoenix_v7._last_tier_by_session["sess-loop-3"] = "l3_critical"
     result = phoenix_v7._guard_tool("terminal", {}, session_id="sess-loop-3")
     assert result["rule_key"] == "phoenix_v7_loop_high_tier_needs_evaluator"
-
 
 def test_subagent_stop_records_approval_on_approved_summary():
     phoenix_v7._pending_loop_approvals.clear()
@@ -94,7 +76,6 @@ def test_subagent_stop_records_approval_on_approved_summary():
     )
     assert phoenix_v7._pending_loop_approvals.get("sess-eval-1") is True
 
-
 def test_subagent_stop_case_insensitive_approved_prefix():
     phoenix_v7._pending_loop_approvals.clear()
     phoenix_v7._on_subagent_stop(
@@ -103,7 +84,6 @@ def test_subagent_stop_case_insensitive_approved_prefix():
         child_status="completed",
     )
     assert phoenix_v7._pending_loop_approvals.get("sess-eval-2") is True
-
 
 def test_subagent_stop_rejected_summary_does_not_record_approval():
     phoenix_v7._pending_loop_approvals.clear()
@@ -114,12 +94,10 @@ def test_subagent_stop_rejected_summary_does_not_record_approval():
     )
     assert "sess-eval-3" not in phoenix_v7._pending_loop_approvals
 
-
 def test_subagent_stop_missing_parent_session_id_is_noop():
     phoenix_v7._pending_loop_approvals.clear()
     phoenix_v7._on_subagent_stop(parent_session_id="", child_summary="APPROVED", child_status="completed")
     assert phoenix_v7._pending_loop_approvals == {}
-
 
 def test_guard_tool_consumes_pending_approval_and_allows_once(monkeypatch):
     _patch_goal(monkeypatch, active=True, seeded=True)
@@ -131,7 +109,6 @@ def test_guard_tool_consumes_pending_approval_and_allows_once(monkeypatch):
 
     second = phoenix_v7._guard_tool("terminal", {}, session_id="sess-eval-4")
     assert second["rule_key"] == "phoenix_v7_loop_high_tier_needs_evaluator"  # 批准已用掉，第二次照样拦
-
 
 def test_guard_tool_high_tier_todo_call_does_not_mark_seeded_until_allowed(monkeypatch):
     _patch_goal(monkeypatch, active=True, created_at=100.0, seeded=False)
@@ -152,7 +129,6 @@ def test_guard_tool_high_tier_todo_call_does_not_mark_seeded_until_allowed(monke
     assert allowed is None
     assert seeded_calls == [("sess-high-todo", 100.0)]
 
-
 def test_guard_tool_passes_trusted_true_when_bucket_trusted(monkeypatch):
     monkeypatch.setattr(phoenix_v7, "is_approval_trusted", lambda bucket_key: True)
     monkeypatch.setattr(phoenix_v7, "is_checkpoints_enabled", lambda: True)  # 避免存档点提醒干扰
@@ -160,14 +136,12 @@ def test_guard_tool_passes_trusted_true_when_bucket_trusted(monkeypatch):
     result = phoenix_v7._guard_tool("write_file", {"path": "/tmp/x.py"}, session_id="trust-1")
     assert result is None  # 信任够了，不该再触发确认
 
-
 def test_guard_tool_passes_trusted_false_when_bucket_not_trusted(monkeypatch):
     monkeypatch.setattr(phoenix_v7, "is_approval_trusted", lambda bucket_key: False)
     monkeypatch.setattr(phoenix_v7, "_last_tier_by_session", {"trust-2": "l2_deep"})
     result = phoenix_v7._guard_tool("write_file", {"path": "/tmp/x.py"}, session_id="trust-2")
     assert result is not None
     assert result["action"] == "approve"
-
 
 def test_guard_tool_detects_hardline_terminal_command(monkeypatch):
     # 即使信任已经攒够，命中永久高危命令类别时也不能跳过——这条走真实的
@@ -180,7 +154,6 @@ def test_guard_tool_detects_hardline_terminal_command(monkeypatch):
     )
     assert result is not None
     assert result["action"] == "approve"
-
 
 def test_guard_tool_benign_command_not_treated_as_hardline(monkeypatch):
     monkeypatch.setattr(phoenix_v7, "is_approval_trusted", lambda bucket_key: True)

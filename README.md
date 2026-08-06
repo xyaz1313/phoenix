@@ -2,8 +2,8 @@
 
 <img src="docs/images/cover.png" alt="不死鸟 Phoenix" width="100%">
 
-[![Version](https://img.shields.io/badge/version-7.6.1-2563EB.svg?style=flat-square)](phoenix_v7/plugin.yaml)
-[![Tests](https://img.shields.io/badge/tests-252%2F252-A3FF12.svg?style=flat-square)](phoenix_v7/tests)
+[![Version](https://img.shields.io/badge/version-7.6.2-2563EB.svg?style=flat-square)](phoenix_v7/plugin.yaml)
+[![Tests](https://img.shields.io/badge/tests-253%2F253-A3FF12.svg?style=flat-square)](phoenix_v7/tests)
 [![License](https://img.shields.io/badge/license-CC%20BY--NC%204.0-16A34A.svg?style=flat-square)](LICENSE)
 
 > 装在 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 上的插件。路由分档、风险防线、自愈系统，全程官方插件钩子接入，不改 Hermes 一行核心代码。
@@ -60,7 +60,7 @@ hermes phoenix-status
 | Checkpoint Reminder 存档点提醒 | 高危操作前提醒开启回滚保护 | 检测到高危操作且 Hermes 自带 checkpoint 功能未开启时事后提醒，引导手动开启 |
 | Adaptive Approval 审批策略自适应 | 按历史批准记录动态调整确认频率 | 同类操作连续批准 3 次后不再重复确认，拒绝一次立即清零，永久高危类别不受信任影响 |
 
-257 个自动化测试全程跟着功能走。完整技术拆解见 [不死鸟 Phoenix 完整技术文档](phoenix_v7/docs/)。
+253 个自动化测试全程跟着功能走，在没有旧 `.hermes` 目录的干净环境下也能跑（`HERMES_AGENT_SRC` 显式指定 hermes-agent 源码位置即可，见 `phoenix_v7/tests/conftest.py`）。完整技术拆解见 [不死鸟 Phoenix 完整技术文档](phoenix_v7/docs/)。
 
 ## 视觉总览
 
@@ -108,11 +108,26 @@ cd 解压后的文件夹
 .\install.ps1
 ```
 
-安装脚本会自动检测本机是否已装 Hermes Agent、启用插件、并自动跑一遍 `hermes phoenix-status` 让你看到安装结果。已安装旧版本会自动备份，不会覆盖丢失。插件复制到的位置是 Hermes 的 Home 目录（macOS/Linux 默认 `~/.hermes/plugins/phoenix_v7/`，Windows 默认 `%LOCALAPPDATA%\hermes\plugins\phoenix_v7\`，设了 `HERMES_HOME` 环境变量的话以那个为准，可以用 `hermes config path` 查看当前实际路径）。
+默认执行**只复制文件、校验，不会自动改 Hermes 的插件启用状态**——干净安装完之后需要自己运行 `hermes plugins enable phoenix_v7` 并跑一遍 `hermes phoenix-status` 确认。已安装旧版本会自动备份，不会覆盖丢失。插件复制到的位置是 Hermes 的 Home 目录（macOS/Linux 默认 `~/.hermes/plugins/phoenix_v7/`，Windows 默认 `%LOCALAPPDATA%\hermes\plugins\phoenix_v7\`，设了 `HERMES_HOME` 环境变量的话以那个为准，可以用 `hermes config path` 查看当前实际路径）。
+
+如果你是从旧版本（比如 `phoenix_full`）**切换**过来，用：
+
+```powershell
+.\install.ps1 -Migrate
+```
+
+这条路径会自动：备份旧插件代码、历史数据、Hermes 配置文件 → 生成 SHA-256 清单校验复制结果 → 禁用旧版本 → 启用 phoenix_v7 → 跑 `phoenix-status` 和最小烟测，确认全程只有一个 Phoenix 版本处于启用状态。**任何一步失败都会自动回滚**到迁移前的状态（旧插件、旧数据、旧启用状态全部恢复），不会留下"新旧混装"或"两边都不能用"的中间态。
+
+> macOS/Linux 的 `install.sh` 目前还是老的"默认安装即自动启用"逻辑，`-Migrate` 这一套事务化切换 + 失败回滚暂时只有 Windows 版做了，后续会补齐。
 
 ### 卸载
 
-删除插件目录即可（路径同上），不影响 Hermes 本体，也不会残留任何对 Hermes 核心文件的修改。如果想连同不死鸟的历史数据（抗体库、成本记录等）一起删，同一个 Home 目录下还有一个 `phoenix_v7_state/` 目录也要删掉；只想清插件代码、保留这些数据的话，别删这个目录。
+```powershell
+.\install.ps1 -Uninstall            # 删除插件代码 + 历史数据（抗体库、成本记录等）
+.\install.ps1 -Uninstall -KeepState # 只删插件代码，保留历史数据
+```
+
+macOS/Linux 手动删除插件目录即可（路径同上）；只想清代码、保留数据的话，别删同一个 Home 目录下的 `phoenix_v7_state/` 目录。两种方式都不影响 Hermes 本体，也不会残留任何对 Hermes 核心文件的修改。
 
 ## 项目结构
 
@@ -125,7 +140,7 @@ phoenix/
 │   ├── loop/              # 长任务守护信号
 │   ├── verify/            # 幻觉核验
 │   ├── privacy/            # 隐私敏感词检测与本地模型切换提醒
-│   ├── tests/              # 257 个自动化测试
+│   ├── tests/              # 253 个自动化测试
 │   ├── docs/                # 使用指南
 │   └── plugin.yaml          # 插件声明 + Hermes 版本兼容性字段
 ├── install.sh            # macOS / Linux 安装脚本
@@ -135,7 +150,7 @@ phoenix/
 
 ## 为什么值得信任
 
-- 257 条自动化测试全程跟着功能走，每次改动都要求全绿才能合并
+- 253 条自动化测试全程跟着功能走，每次改动都要求全绿才能合并；在没有旧 `.hermes` 目录的干净环境下同样能跑
 - 至少三次真实生产事故驱动了关键安全设计（详见完整技术文档）
 - 两次重大重构都是先发现"自己重复造了 Hermes 已有的轮子"，再主动改用官方原生机制，不硬撑自建版本
 - 发布前主动加了版本兼容性自检机制，不指望用户自己去猜"这个版本能不能用"

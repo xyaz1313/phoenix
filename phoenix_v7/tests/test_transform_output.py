@@ -1,23 +1,13 @@
-import sys
-from pathlib import Path
 from types import SimpleNamespace
-
-sys.path.insert(0, str(Path.home() / ".hermes" / "hermes-agent"))
-from hermes_constants import get_hermes_home
-
-sys.path.insert(0, str(get_hermes_home() / "hermes-agent"))
-sys.path.insert(0, str(get_hermes_home() / "plugins"))
 
 import phoenix_v7
 from privacy.warning import PRIVACY_WARNING_TEXT
-
 
 def _reset_state():
     phoenix_v7._last_tier_by_session.clear()
     phoenix_v7._current_provider_by_session.clear()
     phoenix_v7._privacy_flagged_by_session.clear()
     phoenix_v7._privacy_warned_sessions.clear()
-
 
 # ---- _check_privacy_warning 单独测试 ----
 
@@ -31,7 +21,6 @@ def test_check_privacy_warning_appends_when_flagged_and_not_local_and_unwarned()
     assert PRIVACY_WARNING_TEXT in result
     assert "s1" in phoenix_v7._privacy_warned_sessions
 
-
 def test_check_privacy_warning_skips_on_unsupported_platform(monkeypatch):
     # 真实事故：Windows 用户装完 v7.5.0 看到这条提醒引导他们 /model turbofieldfare，
     # 但这个 provider 在非 Mac 平台根本不存在（turbofieldfare 是 MLX/Apple Silicon
@@ -44,7 +33,6 @@ def test_check_privacy_warning_skips_on_unsupported_platform(monkeypatch):
     assert result is None
     assert "s_win" not in phoenix_v7._privacy_warned_sessions
 
-
 def test_check_privacy_warning_skips_when_not_flagged():
     _reset_state()
     phoenix_v7._privacy_flagged_by_session["s2"] = False
@@ -52,14 +40,12 @@ def test_check_privacy_warning_skips_when_not_flagged():
     result = phoenix_v7._check_privacy_warning("原始回复内容", session_id="s2")
     assert result is None
 
-
 def test_check_privacy_warning_skips_when_already_on_turbofieldfare():
     _reset_state()
     phoenix_v7._privacy_flagged_by_session["s3"] = True
     phoenix_v7._current_provider_by_session["s3"] = "turbofieldfare"
     result = phoenix_v7._check_privacy_warning("原始回复内容", session_id="s3")
     assert result is None
-
 
 def test_check_privacy_warning_skips_when_already_warned_this_session():
     _reset_state()
@@ -69,18 +55,15 @@ def test_check_privacy_warning_skips_when_already_warned_this_session():
     result = phoenix_v7._check_privacy_warning("原始回复内容", session_id="s4")
     assert result is None
 
-
 def test_check_privacy_warning_handles_missing_session_id():
     _reset_state()
     result = phoenix_v7._check_privacy_warning("原始回复内容", session_id="")
     assert result is None
 
-
 # 存档点提醒的判定逻辑已经从"事后追加到回复文本"（_check_checkpoint_reminder，
 # 挂在 transform_llm_output）搬到"事前直接拦截工具调用"（_guard_tool，挂在
 # pre_tool_call），相关测试见 tests/test_guard_tool_loop.py。这里不再测
 # _transform_output 对 checkpoint 的处理，因为它已经不做这件事了。
-
 
 # ---- _transform_output 分发函数测试（合并幻觉核验+隐私提醒） ----
 
@@ -91,11 +74,9 @@ def _fake_client(content: str):
         )
     return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
 
-
 def test_transform_output_empty_response_returns_none():
     _reset_state()
     assert phoenix_v7._transform_output(response_text="", session_id="s5") is None
-
 
 def test_transform_output_no_issues_returns_none(monkeypatch):
     _reset_state()
@@ -104,7 +85,6 @@ def test_transform_output_no_issues_returns_none(monkeypatch):
     phoenix_v7._current_provider_by_session["s6"] = "nous"
     result = phoenix_v7._transform_output(response_text="正常回复", session_id="s6", model="z-ai/glm-5.2")
     assert result is None
-
 
 def test_transform_output_privacy_only_preserves_original_text():
     _reset_state()
@@ -117,7 +97,6 @@ def test_transform_output_privacy_only_preserves_original_text():
     assert result is not None
     assert "这是模型的真实回复内容" in result
     assert PRIVACY_WARNING_TEXT in result
-
 
 def test_transform_output_hallucination_and_privacy_both_fire(monkeypatch):
     # l3_critical + get_text_auxiliary_client 返回一个会判"ISSUE"的假客户端 + 隐私命中
@@ -139,5 +118,4 @@ def test_transform_output_hallucination_and_privacy_both_fire(monkeypatch):
     assert "原始回复内容一字不改" in result
     assert "这里的数字看起来是编造的" in result
     assert PRIVACY_WARNING_TEXT in result
-
 
