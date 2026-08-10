@@ -347,6 +347,23 @@ def _on_subagent_stop(**context) -> None:
         )
 
 
+def _on_subagent_start(**context) -> None:
+    """子任务生成瞬间，把父会话当前的风险档位复制给子会话——补上子任务自己
+    第一次被 _route() 分类之前 tier=None 导致高危审批门槛失效的冷启动空窗期。
+    父会话没有 tier（还没被分类过）时不写入，保持子任务原有的 None 行为不变。"""
+    parent_session_id = context.get("parent_session_id") or ""
+    child_session_id = context.get("child_session_id") or ""
+    if not parent_session_id or not child_session_id:
+        return
+    parent_tier = _last_tier_by_session.get(parent_session_id)
+    if parent_tier is not None:
+        _last_tier_by_session[child_session_id] = parent_tier
+        logger.info(
+            "phoenix_v7 subagent: child=%s 继承父会话 tier=%s",
+            child_session_id, parent_tier,
+        )
+
+
 def _check_privacy_warning(current_text: str, *, session_id: str) -> str | None:
     if not session_id:
         return None
@@ -546,6 +563,7 @@ def register(ctx) -> None:
     ctx.register_hook("pre_tool_call", _guard_tool)
     ctx.register_hook("post_api_request", _record_usage)
     ctx.register_hook("api_request_error", _record_api_error)
+    ctx.register_hook("subagent_start", _on_subagent_start)
     ctx.register_hook("subagent_stop", _on_subagent_stop)
     ctx.register_hook("post_approval_response", _on_approval_response)
     ctx.register_hook("transform_llm_output", _transform_output)

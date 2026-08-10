@@ -162,3 +162,42 @@ def test_guard_tool_benign_command_not_treated_as_hardline(monkeypatch):
         "terminal", {"command": "ls -la"}, session_id="trust-4",
     )
     assert result is None  # 信任够了、命令本身不是hardline，应该放行
+
+def test_subagent_start_inherits_parent_tier():
+    phoenix_v7._last_tier_by_session.clear()
+    phoenix_v7._last_tier_by_session["parent-1"] = "l3_critical"
+    phoenix_v7._on_subagent_start(parent_session_id="parent-1", child_session_id="child-1")
+    assert phoenix_v7._last_tier_by_session["child-1"] == "l3_critical"
+
+def test_subagent_start_parent_has_no_tier_is_noop():
+    phoenix_v7._last_tier_by_session.clear()
+    phoenix_v7._on_subagent_start(parent_session_id="parent-2", child_session_id="child-2")
+    assert "child-2" not in phoenix_v7._last_tier_by_session
+
+def test_subagent_start_missing_ids_is_noop():
+    phoenix_v7._last_tier_by_session.clear()
+    phoenix_v7._on_subagent_start(parent_session_id="", child_session_id="")
+    assert phoenix_v7._last_tier_by_session == {}
+
+def test_subagent_inherited_tier_triggers_high_tier_approval(monkeypatch):
+    # 集成验证：继承来的 tier 真的会流进 _guard_tool()，触发高危档位审批门槛，
+    # 不只是字典里有个值那么简单——这是本次改动要解决的真实空窗期。
+    monkeypatch.setattr(phoenix_v7, "is_checkpoints_enabled", lambda: True)
+    phoenix_v7._last_tier_by_session.clear()
+    phoenix_v7._last_tier_by_session["parent-3"] = "l3_critical"
+    phoenix_v7._on_subagent_start(parent_session_id="parent-3", child_session_id="child-3")
+    result = phoenix_v7._guard_tool("terminal", {"command": "ls"}, session_id="child-3")
+    assert result is not None
+    assert result["rule_key"] == "phoenix_v7_high_tier:terminal"
+
+def test_subagent_own_route_overrides_inherited_tier(monkeypatch):
+    # 继承值只补冷启动空窗期——子任务自己一旦被 _route() 分类过，用自己的判断
+    # 结果覆盖继承值，不会永久锁死在父会话当时的档位上。
+    phoenix_v7._last_tier_by_session.clear()
+    phoenix_v7._last_tier_by_session["parent-4"] = "l3_critical"
+    phoenix_v7._on_subagent_start(parent_session_id="parent-4", child_session_id="child-4")
+    assert phoenix_v7._last_tier_by_session["child-4"] == "l3_critical"
+    monkeypatch.setattr(phoenix_v7, "classify", lambda messages: "l0_quick")
+    request = {"model": "default-model", "messages": [{"role": "user", "content": "在吗"}]}
+    phoenix_v7._route(request, session_id="child-4")
+    assert phoenix_v7._last_tier_by_session["child-4"] == "l0_quick"
