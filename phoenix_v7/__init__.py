@@ -33,6 +33,7 @@ from .guardrails.checkpoint_guard import (
     CHECKPOINT_REMINDER_TEXT, is_checkpoint_triggering_call, is_checkpoints_enabled,
 )
 from .guardrails.approval_trust import is_approval_trusted, record_approval_outcome
+from .guardrails.webhook_export import send_alert
 from .privacy.keywords import detect_sensitive
 from .privacy.warning import PRIVACY_WARNING_TEXT, append_privacy_warning  # noqa: F401 (PRIVACY_WARNING_TEXT re-exported for tests)
 from agent.auxiliary_client import get_text_auxiliary_client
@@ -301,6 +302,11 @@ def _guard_tool(tool_name: str, args: dict, **context) -> dict | None:
             is_hardline, _ = detect_hardline_command(command)
         except Exception:
             is_hardline = False
+    if is_hardline:
+        send_alert(
+            "hardline_command_detected", session_id,
+            {"tool_name": tool_name, "command": command},
+        )
     is_trusted = is_approval_trusted(tool_name) if tool_name else False
 
     directive = _evaluate_tool_guard(
@@ -401,11 +407,13 @@ def _transform_output(**context) -> str | None:
     )
     if hallucination_result is not None:
         logger.info("phoenix_v7 verify: hallucination check flagged a response, tier=%s", tier)
+        send_alert("hallucination_flagged", session_id, {"tier": tier})
         current = hallucination_result
         changed = True
 
     privacy_result = _check_privacy_warning(current, session_id=session_id)
     if privacy_result is not None:
+        send_alert("privacy_warning_triggered", session_id, {})
         current = privacy_result
         changed = True
 
@@ -434,7 +442,14 @@ def _record_usage(**context) -> None:
 
 
 def _record_api_error(**context) -> None:
+    was_open = _breaker.state() == "open"
     _breaker.record_failure()
+    if not was_open and _breaker.state() == "open":
+        send_alert(
+            "circuit_breaker_tripped",
+            context.get("session_id", ""),
+            {"error_type": (context.get("error") or {}).get("type")},
+        )
     model = _resolved_model_for(context)
     error_type = (context.get("error") or {}).get("type")
     if model and error_type:
