@@ -68,6 +68,7 @@ def evaluate(
     is_loop_active: bool = False,
     is_hardline: bool = False,
     is_trusted: bool = False,
+    focus_mode: bool = False,
 ) -> dict | None:
     if tool_name not in SAFE_TOOL_WHITELIST and not breaker_allows:
         return {
@@ -108,9 +109,10 @@ def evaluate(
                 ),
                 "rule_key": "phoenix_v7_loop_high_tier_needs_evaluator",
             }
-        # 信任机制：同一工具类型连续批准够了就不再触发确认，除非命中 Hermes 自己
-        # 判定的永久高危命令类别——那条安全红线不接受信任覆盖。
-        if is_trusted and not is_hardline:
+        # 信任机制 + 专注模式：同一工具类型连续批准够了，或者用户主动开了专注
+        # 模式暂停提示，都不再触发确认——除非命中 Hermes 自己判定的永久高危命令
+        # 类别，那条安全红线两者都不能覆盖。
+        if (is_trusted or focus_mode) and not is_hardline:
             return None
         return {
             "action": "approve",

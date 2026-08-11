@@ -219,3 +219,34 @@ def test_scheduled_high_tier_ignores_trust():
     )
     assert result["action"] == "block"
     assert result["rule_key"] == "phoenix_v7_scheduled_high_tier_skip"
+
+
+def test_focus_mode_high_tier_call_skips_approval():
+    result = evaluate(
+        tier="l2_deep", breaker_allows=True, tool_name="write_file", focus_mode=True,
+    )
+    assert result is None
+
+
+def test_focus_mode_off_high_tier_call_still_requires_approval():
+    result = evaluate(
+        tier="l2_deep", breaker_allows=True, tool_name="write_file", focus_mode=False,
+    )
+    assert result["action"] == "approve"
+
+
+def test_focus_mode_does_not_bypass_hardline_command():
+    # 专注模式跟信任机制一样，拦不住 hardline 永久高危命令类别。
+    result = evaluate(
+        tier="l3_critical", breaker_allows=True, tool_name="terminal",
+        focus_mode=True, is_hardline=True,
+    )
+    assert result["action"] == "approve"
+
+
+def test_focus_mode_and_trust_both_false_still_requires_approval():
+    result = evaluate(
+        tier="l2_deep", breaker_allows=True, tool_name="write_file",
+        focus_mode=False, is_trusted=False,
+    )
+    assert result["action"] == "approve"
