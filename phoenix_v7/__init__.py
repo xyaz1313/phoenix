@@ -805,6 +805,8 @@ def _handle_status_cli(args) -> None:
     else:
         hermes_version_line = "Hermes 版本: 无法读取（不影响不死鸟其它功能）"
 
+    mem_counts = _memory_stats(_resolve_memory_db_path())
+
     print(
         "phoenix_v7 状态\n"
         f"  路由: {router_status}\n"
@@ -817,7 +819,9 @@ def _handle_status_cli(args) -> None:
         f"  今日花费(估算，非真实计费): ${daily_cost:.4f}\n"
         f"  抗体库: {antibody_stats['total_patterns']} 个已知模式"
         f"（{antibody_stats['disabled_patterns']} 个已停用）\n"
-        f"{fallback_line}"
+        f"{fallback_line}\n"
+        f"  记忆库: {mem_counts['fact']} 条事实 / {mem_counts['belief']} 条信念 / "
+        f"{mem_counts['observation']} 条待确认 / {mem_counts['archived']} 条已归档"
     )
 
 
@@ -858,6 +862,23 @@ def _handle_upgrade_log_slash(raw_args: str) -> str:
     return format_upgrade_log(path=_upgrade_watch_state_path)
 
 
+def _handle_memory_slash(raw_args: str) -> str:
+    """/phoenix-memory forget <关键词> | clear confirm —— 管理不死鸟自己的
+    分层记忆库(独立于Hermes原生MEMORY.md)。"""
+    parts = raw_args.strip().split(maxsplit=1)
+    action = parts[0].lower() if parts else ""
+    if action == "forget" and len(parts) > 1:
+        removed = _forget_memories_matching(_resolve_memory_db_path(), parts[1])
+        return f"phoenix_v7 记忆库：已删除 {removed} 条匹配「{parts[1]}」的记忆"
+    if action == "clear":
+        arg2 = parts[1].lower() if len(parts) > 1 else ""
+        if arg2 != "confirm":
+            return "确认要清空整个记忆库吗？请运行：/phoenix-memory clear confirm"
+        removed = _clear_all_memories(_resolve_memory_db_path())
+        return f"phoenix_v7 记忆库：已清空，共删除 {removed} 条记忆"
+    return "用法：/phoenix-memory forget <关键词> | /phoenix-memory clear confirm"
+
+
 def register(ctx) -> None:
     logger.info("phoenix_v7: plugin registered")
     ctx.register_middleware("llm_request", _route)
@@ -881,6 +902,10 @@ def register(ctx) -> None:
     ctx.register_command(
         "phoenix-upgrade-log", handler=_handle_upgrade_log_slash,
         description="查看Hermes版本变化历史+升级后窗口期内的异常记录",
+    )
+    ctx.register_command(
+        "phoenix-memory", handler=_handle_memory_slash,
+        description="管理不死鸟自己的分层记忆库(forget/clear)",
     )
     ctx.register_cli_command(
         "phoenix-router",
