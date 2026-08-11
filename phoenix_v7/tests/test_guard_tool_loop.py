@@ -277,3 +277,40 @@ def test_router_slash_handler_on_off_status(tmp_path, monkeypatch):
 
     off_result = phoenix_v7._handle_router_slash("off", path=tiers_path)
     assert "手动挡" in off_result or "关闭" in off_result
+
+
+def test_on_session_start_detects_version_transition(monkeypatch, tmp_path):
+    state_path = tmp_path / "upgrade_watch.json"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("x: 1\n", encoding="utf-8")
+    monkeypatch.setattr(phoenix_v7, "_upgrade_watch_state_path", state_path)
+    monkeypatch.setattr(phoenix_v7, "_upgrade_watch_config_path", config_path)
+    monkeypatch.setattr(phoenix_v7, "_read_hermes_version", lambda: "0.19.1")
+    phoenix_v7._on_session_start(session_id="s1", model="x", platform="cli")
+    monkeypatch.setattr(phoenix_v7, "_read_hermes_version", lambda: "0.20.0")
+    phoenix_v7._on_session_start(session_id="s2", model="x", platform="cli")
+    log = phoenix_v7._handle_upgrade_log_slash("")
+    assert "0.19.1" in log and "0.20.0" in log
+
+
+def test_record_api_error_archives_anomaly_in_window(monkeypatch, tmp_path):
+    state_path = tmp_path / "upgrade_watch.json"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("x: 1\n", encoding="utf-8")
+    monkeypatch.setattr(phoenix_v7, "_upgrade_watch_state_path", state_path)
+    monkeypatch.setattr(phoenix_v7, "_upgrade_watch_config_path", config_path)
+    monkeypatch.setattr(phoenix_v7, "_read_hermes_version", lambda: "0.19.1")
+    phoenix_v7._on_session_start(session_id="s1", model="x", platform="cli")
+    monkeypatch.setattr(phoenix_v7, "_read_hermes_version", lambda: "0.20.0")
+    phoenix_v7._on_session_start(session_id="s2", model="x", platform="cli")
+    phoenix_v7._breaker.record_success()
+    phoenix_v7._record_api_error(session_id="s2", error={"type": "timeout"})
+    log = phoenix_v7._handle_upgrade_log_slash("")
+    assert "api_error" in log
+
+
+def test_upgrade_log_slash_no_history(monkeypatch, tmp_path):
+    state_path = tmp_path / "upgrade_watch.json"
+    monkeypatch.setattr(phoenix_v7, "_upgrade_watch_state_path", state_path)
+    result = phoenix_v7._handle_upgrade_log_slash("")
+    assert "没有" in result

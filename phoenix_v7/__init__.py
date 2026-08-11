@@ -35,6 +35,10 @@ from .guardrails.checkpoint_guard import (
 from .guardrails.approval_trust import is_approval_trusted, record_approval_outcome
 from .guardrails.webhook_export import send_alert
 from .guardrails.focus_mode import is_focus_mode_enabled, set_focus_mode, focus_mode_status_line
+from .guardrails.upgrade_watch import (
+    check_version_transition, record_upgrade_anomaly,
+    upgrade_summary_line, format_upgrade_log,
+)
 from .privacy.keywords import detect_sensitive
 from .privacy.warning import PRIVACY_WARNING_TEXT, append_privacy_warning  # noqa: F401 (PRIVACY_WARNING_TEXT re-exported for tests)
 from agent.auxiliary_client import get_text_auxiliary_client
@@ -109,6 +113,9 @@ _focus_mode_path: Path | None = None  # 测试用 monkeypatch 覆盖默认路径
 # 被信任/专注模式放行的不算）。达到3次时提醒一次可以开专注模式，之后不重复。
 _consecutive_high_tier_prompts_by_session: dict[str, int] = {}
 _focus_mode_suggested_sessions: set[str] = set()
+
+_upgrade_watch_state_path: Path | None = None  # 测试用 monkeypatch 覆盖
+_upgrade_watch_config_path: Path | None = None  # 测试用 monkeypatch 覆盖
 
 _HERMES_CONFIG_PATH = get_hermes_home() / "config.yaml"
 
@@ -474,6 +481,18 @@ def _on_subagent_start(**context) -> None:
         )
 
 
+def _on_session_start(**context) -> None:
+    """检测Hermes版本是否变化——两次全新session之间发生过一次升级的话，
+    备份config.yaml + 记一条transition，开启30分钟异常归档窗口。"""
+    try:
+        current = _read_hermes_version()
+        check_version_transition(
+            current, path=_upgrade_watch_state_path, config_path=_upgrade_watch_config_path,
+        )
+    except Exception:
+        logger.debug("phoenix_v7 upgrade_watch: version check failed", exc_info=True)
+
+
 def _check_privacy_warning(current_text: str, *, session_id: str) -> str | None:
     if not session_id:
         return None
@@ -558,6 +577,9 @@ def _record_api_error(**context) -> None:
     error_type = (context.get("error") or {}).get("type")
     if model and error_type:
         _model_health.record_failure(model, error_type)
+    record_upgrade_anomaly(
+        "api_error", error_type or "unknown", path=_upgrade_watch_state_path,
+    )
 
 
 def _heal(tool_name: str, args: dict, next_call, **context):
@@ -577,6 +599,10 @@ def _heal(tool_name: str, args: dict, next_call, **context):
         result = next_call(args)
     except Exception as exc:
         error_message = str(exc)
+        record_upgrade_anomaly(
+            "tool_error", f"{tool_name}: {error_message[:200]}",
+            path=_upgrade_watch_state_path,
+        )
         outcome = _error_processor.handle(tool_name=tool_name, error_message=error_message)
         if outcome.fix_hint:
             logger.info("phoenix_v7 selfheal: %s -> retrying with hint: %s", tool_name, outcome.fix_hint)
@@ -666,6 +692,7 @@ def _handle_status_cli(args) -> None:
         "phoenix_v7 状态\n"
         f"  路由: {router_status}\n"
         f"  专注模式: {focus_mode_status_line()}\n"
+        f"  版本变化: {upgrade_summary_line()}\n"
         f"  熔断器: {breaker_state}\n"
         "  长任务(Loop): 用 Hermes 原生 `/goal status` 查看（不死鸟在此基础上加了"
         "清单强制+高危操作复核，见 docs/Loop长任务使用指南.md）\n"
@@ -709,6 +736,11 @@ def _handle_router_slash(raw_args: str, path: Path | None = None) -> str:
     return "用法：/phoenix-router on | off | status"
 
 
+def _handle_upgrade_log_slash(raw_args: str) -> str:
+    """/phoenix-upgrade-log —— 查看Hermes版本变化历史 + 变化后窗口期内记录的异常。"""
+    return format_upgrade_log(path=_upgrade_watch_state_path)
+
+
 def register(ctx) -> None:
     logger.info("phoenix_v7: plugin registered")
     ctx.register_middleware("llm_request", _route)
@@ -719,6 +751,7 @@ def register(ctx) -> None:
     ctx.register_hook("subagent_stop", _on_subagent_stop)
     ctx.register_hook("post_approval_response", _on_approval_response)
     ctx.register_hook("transform_llm_output", _transform_output)
+    ctx.register_hook("on_session_start", _on_session_start)
     ctx.register_middleware("tool_execution", _heal)
     ctx.register_command(
         "phoenix-focus", handler=_handle_focus_slash,
@@ -727,6 +760,10 @@ def register(ctx) -> None:
     ctx.register_command(
         "phoenix-router", handler=_handle_router_slash,
         description="开关自动路由换模型（终端命令 hermes phoenix-router 的斜杠命令版）",
+    )
+    ctx.register_command(
+        "phoenix-upgrade-log", handler=_handle_upgrade_log_slash,
+        description="查看Hermes版本变化历史+升级后窗口期内的异常记录",
     )
     ctx.register_cli_command(
         "phoenix-router",
