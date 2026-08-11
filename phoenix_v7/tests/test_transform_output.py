@@ -119,3 +119,54 @@ def test_transform_output_hallucination_and_privacy_both_fire(monkeypatch):
     assert "这里的数字看起来是编造的" in result
     assert PRIVACY_WARNING_TEXT in result
 
+
+def test_transform_output_warns_when_context_size_crosses_threshold(monkeypatch):
+    _reset_state()
+    phoenix_v7._prompt_tokens_by_session.clear()
+    phoenix_v7._context_size_warned_sessions.clear()
+    phoenix_v7._last_tier_by_session["s-ctx1"] = "l1_daily"
+    phoenix_v7._privacy_flagged_by_session["s-ctx1"] = False
+    phoenix_v7._current_provider_by_session["s-ctx1"] = "nous"
+    phoenix_v7._prompt_tokens_by_session["s-ctx1"] = 150_000
+    result = phoenix_v7._transform_output(response_text="正常回复", session_id="s-ctx1", model="z-ai/glm-5.2")
+    assert result is not None
+    assert "150,000" in result
+
+
+def test_transform_output_does_not_warn_below_threshold(monkeypatch):
+    _reset_state()
+    phoenix_v7._prompt_tokens_by_session.clear()
+    phoenix_v7._context_size_warned_sessions.clear()
+    phoenix_v7._last_tier_by_session["s-ctx2"] = "l1_daily"
+    phoenix_v7._privacy_flagged_by_session["s-ctx2"] = False
+    phoenix_v7._current_provider_by_session["s-ctx2"] = "nous"
+    phoenix_v7._prompt_tokens_by_session["s-ctx2"] = 5_000
+    result = phoenix_v7._transform_output(response_text="正常回复", session_id="s-ctx2", model="z-ai/glm-5.2")
+    assert result is None
+
+
+def test_transform_output_only_warns_once_per_session(monkeypatch):
+    _reset_state()
+    phoenix_v7._prompt_tokens_by_session.clear()
+    phoenix_v7._context_size_warned_sessions.clear()
+    phoenix_v7._last_tier_by_session["s-ctx3"] = "l1_daily"
+    phoenix_v7._privacy_flagged_by_session["s-ctx3"] = False
+    phoenix_v7._current_provider_by_session["s-ctx3"] = "nous"
+    phoenix_v7._prompt_tokens_by_session["s-ctx3"] = 150_000
+    first = phoenix_v7._transform_output(response_text="正常回复", session_id="s-ctx3", model="z-ai/glm-5.2")
+    assert first is not None
+    second = phoenix_v7._transform_output(response_text="第二轮回复", session_id="s-ctx3", model="z-ai/glm-5.2")
+    assert second is None
+
+
+def test_record_usage_tracks_prompt_tokens():
+    phoenix_v7._prompt_tokens_by_session.clear()
+    phoenix_v7._record_usage(session_id="s-ctx4", usage={"total_tokens": 200, "prompt_tokens": 180})
+    assert phoenix_v7._prompt_tokens_by_session["s-ctx4"] == 180
+
+
+def test_record_usage_missing_prompt_tokens_defaults_to_zero():
+    phoenix_v7._prompt_tokens_by_session.clear()
+    phoenix_v7._record_usage(session_id="s-ctx5", usage={"total_tokens": 200})
+    assert phoenix_v7._prompt_tokens_by_session["s-ctx5"] == 0
+

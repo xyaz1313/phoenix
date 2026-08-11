@@ -39,6 +39,7 @@ from .guardrails.upgrade_watch import (
     check_version_transition, record_upgrade_anomaly,
     upgrade_summary_line, format_upgrade_log,
 )
+from .guardrails.context_watch import should_warn_context_size, context_size_warning_text
 from .privacy.keywords import detect_sensitive
 from .privacy.warning import PRIVACY_WARNING_TEXT, append_privacy_warning  # noqa: F401 (PRIVACY_WARNING_TEXT re-exported for tests)
 from agent.auxiliary_client import get_text_auxiliary_client
@@ -116,6 +117,10 @@ _focus_mode_suggested_sessions: set[str] = set()
 
 _upgrade_watch_state_path: Path | None = None  # 测试用 monkeypatch 覆盖
 _upgrade_watch_config_path: Path | None = None  # 测试用 monkeypatch 覆盖
+
+# session_id -> 最新一轮 API 调用的 prompt_tokens（_record_usage 每次刷新）。
+_prompt_tokens_by_session: dict[str, int] = {}
+_context_size_warned_sessions: set[str] = set()
 
 _HERMES_CONFIG_PATH = get_hermes_home() / "config.yaml"
 
@@ -540,6 +545,16 @@ def _transform_output(**context) -> str | None:
         current = privacy_result
         changed = True
 
+    prompt_tokens = _prompt_tokens_by_session.get(session_id, 0)
+    if (
+        session_id
+        and should_warn_context_size(prompt_tokens)
+        and session_id not in _context_size_warned_sessions
+    ):
+        _context_size_warned_sessions.add(session_id)
+        current = f"{current}\n\n{context_size_warning_text(prompt_tokens)}"
+        changed = True
+
     return current if changed else None
 
 
@@ -562,6 +577,9 @@ def _record_usage(**context) -> None:
     model = _resolved_model_for(context)
     if model:
         _model_health.record_success(model)
+    session_id = context.get("session_id", "")
+    if session_id:
+        _prompt_tokens_by_session[session_id] = usage.get("prompt_tokens", 0) or 0
 
 
 def _record_api_error(**context) -> None:
