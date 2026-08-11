@@ -1,6 +1,6 @@
 name: phoenix_v7
 version: 7.6.2
-verified_hermes_version: "0.19.1"
+verified_hermes_version: "0.20.0"
 description: "不死鸟 V7 — 路由分档/成本防线/自愈最小核心，官方钩子接入，不改Hermes核心文件"
 author: "xiaoye"
 kind: standalone
