@@ -305,3 +305,114 @@ def test_session_pin_not_set_when_provider_unconfirmed(monkeypatch):
     r = phoenix_v7._route(heavy, session_id="test-pin-4", provider="turbofieldfare")
     assert r is None
     assert "test-pin-4" not in phoenix_v7._pinned_route_by_session
+
+
+# ==================== provider "custom" 归一化兼容（2026-08-11 真机bug修复） ====================
+# 背景：Hermes 对 transport: chat_completions 的自定义 provider，运行时传给插件
+# context["provider"] 的值统一是字面量 "custom"，不是 config.yaml 里用户自己取的
+# provider 名（比如 "turbofieldfare"）——直接插了调试探针在真实对话里打印出来的，
+# 不是猜的。之前所有测试都直接传 provider="turbofieldfare"，这跟真实运行时传的值
+# 不一致，是测试没能提前抓到这个bug的原因。
+
+def test_load_provider_base_url_reads_providers_api(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "providers:\n  turbofieldfare:\n    api: http://127.0.0.1:8399/v1\n",
+        encoding="utf-8",
+    )
+    assert phoenix_v7._load_provider_base_url("turbofieldfare", path=config_path) == "http://127.0.0.1:8399/v1"
+
+def test_load_provider_base_url_missing_provider_returns_none(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("providers:\n  nous: {}\n", encoding="utf-8")
+    assert phoenix_v7._load_provider_base_url("turbofieldfare", path=config_path) is None
+
+def test_load_provider_base_url_missing_file_returns_none(tmp_path):
+    assert phoenix_v7._load_provider_base_url("turbofieldfare", path=tmp_path / "missing.yaml") is None
+
+def test_providers_match_named_provider_exact_string_compare(tmp_path):
+    # current_provider 不是 "custom" 时，走原来的精确字符串比对，不查配置文件。
+    assert phoenix_v7._providers_match("nous", "", "nous", path=tmp_path / "unused.yaml") is True
+    assert phoenix_v7._providers_match("nous", "", "openai", path=tmp_path / "unused.yaml") is False
+
+def test_providers_match_custom_falls_back_to_base_url(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "providers:\n  turbofieldfare:\n    api: http://127.0.0.1:8399/v1\n",
+        encoding="utf-8",
+    )
+    assert phoenix_v7._providers_match(
+        "custom", "http://127.0.0.1:8399/v1", "turbofieldfare", path=config_path
+    ) is True
+
+def test_providers_match_custom_with_mismatched_base_url_fails(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "providers:\n  turbofieldfare:\n    api: http://127.0.0.1:8399/v1\n",
+        encoding="utf-8",
+    )
+    assert phoenix_v7._providers_match(
+        "custom", "http://127.0.0.1:9999/v1", "turbofieldfare", path=config_path
+    ) is False
+
+def test_providers_match_custom_with_no_base_url_fails(tmp_path):
+    assert phoenix_v7._providers_match("custom", "", "turbofieldfare", path=tmp_path / "unused.yaml") is False
+
+def test_providers_match_custom_ignores_trailing_slash(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "providers:\n  turbofieldfare:\n    api: http://127.0.0.1:8399/v1/\n",
+        encoding="utf-8",
+    )
+    assert phoenix_v7._providers_match(
+        "custom", "http://127.0.0.1:8399/v1", "turbofieldfare", path=config_path
+    ) is True
+
+def test_route_switches_model_when_current_provider_is_custom_and_base_url_matches(monkeypatch, tmp_path):
+    # 复现真实bug场景端到端：Hermes运行时传provider="custom"（不是config里的
+    # provider名），只有base_url能确认这是不是主线路的turbofieldfare。
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "providers:\n  turbofieldfare:\n    api: http://127.0.0.1:8399/v1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(phoenix_v7, "_HERMES_CONFIG_PATH", config_path)
+    monkeypatch.setattr(phoenix_v7, "_primary_provider", "turbofieldfare")
+    monkeypatch.setattr(
+        phoenix_v7, "load_tier_overrides",
+        lambda: (True, {"l2_deep": {"model": "local-26b", "provider": "turbofieldfare"}}),
+    )
+    phoenix_v7._last_tier_by_session.clear()
+    request = {
+        "model": "local-3b",
+        "messages": [{"role": "user", "content": "帮我设计一个分布式系统的一致性方案"}],
+    }
+    result = phoenix_v7._route(
+        request, session_id="test-custom-provider-1",
+        provider="custom", base_url="http://127.0.0.1:8399/v1",
+    )
+    assert result is not None
+    assert result["request"]["model"] == "local-26b"
+
+def test_route_does_not_switch_when_custom_base_url_points_elsewhere(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "providers:\n  turbofieldfare:\n    api: http://127.0.0.1:8399/v1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(phoenix_v7, "_HERMES_CONFIG_PATH", config_path)
+    monkeypatch.setattr(phoenix_v7, "_primary_provider", "turbofieldfare")
+    monkeypatch.setattr(
+        phoenix_v7, "load_tier_overrides",
+        lambda: (True, {"l2_deep": {"model": "local-26b", "provider": "turbofieldfare"}}),
+    )
+    phoenix_v7._last_tier_by_session.clear()
+    request = {
+        "model": "local-3b",
+        "messages": [{"role": "user", "content": "帮我设计一个分布式系统的一致性方案"}],
+    }
+    result = phoenix_v7._route(
+        request, session_id="test-custom-provider-2",
+        provider="custom", base_url="https://api.some-other-relay.com/v1",
+    )
+    assert result is None
