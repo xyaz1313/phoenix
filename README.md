@@ -3,7 +3,7 @@
 <img src="docs/images/cover.png" alt="不死鸟 Phoenix" width="100%">
 
 [![Version](https://img.shields.io/badge/version-7.6.2-2563EB.svg?style=flat-square)](phoenix_v7/plugin.yaml)
-[![Tests](https://img.shields.io/badge/tests-282%2F282-A3FF12.svg?style=flat-square)](phoenix_v7/tests)
+[![Tests](https://img.shields.io/badge/tests-311%2F311-A3FF12.svg?style=flat-square)](phoenix_v7/tests)
 [![License](https://img.shields.io/badge/license-CC%20BY--NC%204.0-16A34A.svg?style=flat-square)](LICENSE)
 
 > 装在 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 上的插件。路由分档、风险防线、自愈系统，全程官方插件钩子接入，不改 Hermes 一行核心代码。
@@ -46,7 +46,18 @@ hermes phoenix-router on   # 开启：按档位自动切换模型
 hermes phoenix-router off  # 关闭：只判断档位，不切换模型（默认状态）
 ```
 
+桌面端没有终端，用对话里的斜杠命令一样能切：`/phoenix-router on|off|status`。
+
 怎么给档位配模型（单模型/多模型分Key/中转站三种情况分别怎么填）见 [三场景配置指南](phoenix_v7/docs/三场景配置指南.md)。
+
+想专心用固定模型干活、不想被深度/真神档的确认提示打断，用专注模式（CLI/桌面端通用）：
+
+```text
+/phoenix-focus on   # 暂停确认提示（hardline永久高危命令不受影响）
+/phoenix-focus off  # 恢复
+```
+
+同一次会话里连续弹了 3 次确认提示，第 3 次会自动带一句"要不要开专注模式"的建议，不会每次都提醒。
 
 长任务场景直接用 Hermes 原生命令，不死鸟自动接管清单强制和高危复核：
 
@@ -70,8 +81,9 @@ hermes phoenix-router off  # 关闭：只判断档位，不切换模型（默认
 | Adaptive Approval 审批策略自适应 | 按历史批准记录动态调整确认频率 | 同类操作连续批准 3 次后不再重复确认，拒绝一次立即清零，永久高危类别不受信任影响 |
 | Subagent Context 子任务风险继承 | 补子任务冷启动空窗期 | 委派子任务瞬间继承父会话当时的风险档位，子任务自己重新判定后再覆盖 |
 | Webhook 审计外发 | 把风险信号推给外部系统 | 熔断跳闸/高危命令/幻觉核验/隐私提醒签名后 POST 到自配置端点，默认关闭 |
+| Focus Mode 专注模式 | 专心干活时暂停高危确认提示 | 斜杠命令`/phoenix-focus`开关，CLI/桌面端通用，连续3次提示后自动建议一次 |
 
-282 个自动化测试全程跟着功能走，在没有旧 `.hermes` 目录的干净环境下也能跑（`HERMES_AGENT_SRC` 显式指定 hermes-agent 源码位置即可，见 `phoenix_v7/tests/conftest.py`）。完整技术拆解见 [不死鸟 Phoenix 完整技术文档](phoenix_v7/docs/)。
+311 个自动化测试全程跟着功能走，在没有旧 `.hermes` 目录的干净环境下也能跑（`HERMES_AGENT_SRC` 显式指定 hermes-agent 源码位置即可，见 `phoenix_v7/tests/conftest.py`）。完整技术拆解见 [不死鸟 Phoenix 完整技术文档](phoenix_v7/docs/)。
 
 ## 视觉总览
 
@@ -151,7 +163,7 @@ phoenix/
 │   ├── loop/              # 长任务守护信号
 │   ├── verify/            # 幻觉核验
 │   ├── privacy/            # 隐私敏感词检测与本地模型切换提醒
-│   ├── tests/              # 282 个自动化测试
+│   ├── tests/              # 311 个自动化测试
 │   ├── docs/                # 使用指南
 │   └── plugin.yaml          # 插件声明 + Hermes 版本兼容性字段
 ├── install.sh            # macOS / Linux 安装脚本
@@ -161,7 +173,7 @@ phoenix/
 
 ## 为什么值得信任
 
-- 282 条自动化测试全程跟着功能走，每次改动都要求全绿才能合并；在没有旧 `.hermes` 目录的干净环境下同样能跑
+- 311 条自动化测试全程跟着功能走，每次改动都要求全绿才能合并；在没有旧 `.hermes` 目录的干净环境下同样能跑
 - 至少三次真实生产事故驱动了关键安全设计（详见完整技术文档）
 - 两次重大重构都是先发现"自己重复造了 Hermes 已有的轮子"，再主动改用官方原生机制，不硬撑自建版本
 - 发布前主动加了版本兼容性自检机制，不指望用户自己去猜"这个版本能不能用"
