@@ -1,0 +1,4 @@
+# Claude/superpowers 内部开发文档——设计spec、实施计划，不是给用户看的产品文档，
+# 不该跟着产品代码进公开仓库（2026-08-11 从历史里彻底清理过一次，这个规则防止
+# 同类内容再次被 git add 进来）。备份副本在仓库外的 ~/Projects/phoenix-dev-docs/。
+docs/superpowers/
