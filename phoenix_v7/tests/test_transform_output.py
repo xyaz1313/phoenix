@@ -8,6 +8,8 @@ def _reset_state():
     phoenix_v7._current_provider_by_session.clear()
     phoenix_v7._privacy_flagged_by_session.clear()
     phoenix_v7._privacy_warned_sessions.clear()
+    phoenix_v7._on_fallback_by_session.clear()
+    phoenix_v7._previous_fallback_state_by_session.clear()
 
 # ---- _check_privacy_warning 单独测试 ----
 
@@ -157,6 +159,49 @@ def test_transform_output_only_warns_once_per_session(monkeypatch):
     assert first is not None
     second = phoenix_v7._transform_output(response_text="第二轮回复", session_id="s-ctx3", model="z-ai/glm-5.2")
     assert second is None
+
+
+def test_transform_output_notifies_when_falling_back_to_fallback_model(monkeypatch):
+    _reset_state()
+    phoenix_v7._last_tier_by_session["s-fb1"] = "l1_daily"
+    phoenix_v7._privacy_flagged_by_session["s-fb1"] = False
+    phoenix_v7._current_provider_by_session["s-fb1"] = "nous"
+    phoenix_v7._previous_fallback_state_by_session["s-fb1"] = False  # 上一轮还在主力
+    phoenix_v7._on_fallback_by_session["s-fb1"] = True  # 这一轮已经在兜底
+    result = phoenix_v7._transform_output(
+        response_text="正常回复", session_id="s-fb1", model="deepseek-chat",
+    )
+    assert result is not None
+    assert "deepseek-chat" in result
+    assert "兜底" in result
+
+
+def test_transform_output_notifies_when_recovering_to_primary(monkeypatch):
+    _reset_state()
+    phoenix_v7._last_tier_by_session["s-fb2"] = "l1_daily"
+    phoenix_v7._privacy_flagged_by_session["s-fb2"] = False
+    phoenix_v7._current_provider_by_session["s-fb2"] = "nous"
+    phoenix_v7._previous_fallback_state_by_session["s-fb2"] = True  # 上一轮在兜底
+    phoenix_v7._on_fallback_by_session["s-fb2"] = False  # 这一轮已经切回主力
+    result = phoenix_v7._transform_output(
+        response_text="正常回复", session_id="s-fb2", model="z-ai/glm-5.2",
+    )
+    assert result is not None
+    assert "恢复" in result
+    assert "切回" in result
+
+
+def test_transform_output_no_fallback_notice_when_state_unchanged(monkeypatch):
+    _reset_state()
+    phoenix_v7._last_tier_by_session["s-fb3"] = "l1_daily"
+    phoenix_v7._privacy_flagged_by_session["s-fb3"] = False
+    phoenix_v7._current_provider_by_session["s-fb3"] = "nous"
+    phoenix_v7._previous_fallback_state_by_session["s-fb3"] = False
+    phoenix_v7._on_fallback_by_session["s-fb3"] = False
+    result = phoenix_v7._transform_output(
+        response_text="正常回复", session_id="s-fb3", model="z-ai/glm-5.2",
+    )
+    assert result is None
 
 
 def test_record_usage_tracks_prompt_tokens():

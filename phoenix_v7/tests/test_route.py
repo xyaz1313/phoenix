@@ -180,6 +180,21 @@ def test_route_caches_provider_even_when_not_primary(monkeypatch):
     assert phoenix_v7._current_provider_by_session["test-cache-2"] == "turbofieldfare"
     assert phoenix_v7._privacy_flagged_by_session["test-cache-2"] is False
 
+def test_route_records_on_fallback_when_current_provider_is_not_primary(monkeypatch):
+    monkeypatch.setattr(phoenix_v7, "_primary_provider", "nous")
+    phoenix_v7._on_fallback_by_session.clear()
+    request = {"model": "default-model", "messages": [{"role": "user", "content": "在吗"}]}
+    phoenix_v7._route(request, session_id="test-fallback-flag-1", provider="deepseek")
+    assert phoenix_v7._on_fallback_by_session["test-fallback-flag-1"] is True
+
+def test_route_records_not_on_fallback_when_current_provider_is_primary(monkeypatch):
+    monkeypatch.setattr(phoenix_v7, "load_tier_overrides", lambda: (False, {}))
+    monkeypatch.setattr(phoenix_v7, "_primary_provider", "nous")
+    phoenix_v7._on_fallback_by_session.clear()
+    request = {"model": "default-model", "messages": [{"role": "user", "content": "在吗"}]}
+    phoenix_v7._route(request, session_id="test-fallback-flag-2", provider="nous")
+    assert phoenix_v7._on_fallback_by_session["test-fallback-flag-2"] is False
+
 def test_route_skips_rewrite_when_candidate_provider_mismatches_current(monkeypatch):
     monkeypatch.setattr(phoenix_v7, "_primary_provider", "nous")
     monkeypatch.setattr(

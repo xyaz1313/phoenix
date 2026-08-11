@@ -40,6 +40,7 @@ from .guardrails.upgrade_watch import (
     upgrade_summary_line, format_upgrade_log,
 )
 from .guardrails.context_watch import should_warn_context_size, context_size_warning_text
+from .guardrails.fallback_watch import fallback_transition_text
 from .privacy.keywords import detect_sensitive
 from .privacy.warning import PRIVACY_WARNING_TEXT, append_privacy_warning  # noqa: F401 (PRIVACY_WARNING_TEXT re-exported for tests)
 from agent.auxiliary_client import get_text_auxiliary_client
@@ -67,6 +68,16 @@ _resolved_model_by_session: dict[str, str] = {}
 # turn_finalizer.py 源码），只能靠这份缓存判断"这个session现在是不是在
 # turbofieldfare上"。
 _current_provider_by_session: dict[str, str] = {}
+
+# session_id -> 这次请求是否走了 Hermes 原生 fallback_model 链（= _route() 算出来的
+# on_primary_route 取反）。transform_llm_output 侧要判断"这一轮相对上一轮兜底状态
+# 有没有变化"，同一份 on_primary_route 不能只算在 _route() 局部变量里，得存下来。
+_on_fallback_by_session: dict[str, bool] = {}
+
+# session_id -> 上一次检测到的兜底状态，用来跟这一轮的状态比较、判断有没有发生
+# "刚切到兜底"或"刚切回主力"这类转变（fallback_watch.fallback_transition_text
+# 只在状态真的变化时才返回提示文案，同一状态连续多轮不会重复刷屏）。
+_previous_fallback_state_by_session: dict[str, bool] = {}
 
 # session_id -> 这一轮 messages 是否命中隐私敏感词（_route() 每次调用都刷新，
 # 包括早退路径，避免 transform_llm_output 侧读到陈旧值）。
@@ -271,6 +282,8 @@ def _route(request: dict, **context) -> dict | None:
         and current_provider
         and not _providers_match(current_provider, current_base_url, _primary_provider)
     )
+    if session_id:
+        _on_fallback_by_session[session_id] = not on_primary_route
 
     tier = None
     new_model = default_model
@@ -554,6 +567,19 @@ def _transform_output(**context) -> str | None:
         _context_size_warned_sessions.add(session_id)
         current = f"{current}\n\n{context_size_warning_text(prompt_tokens)}"
         changed = True
+
+    if session_id:
+        current_on_fallback = _on_fallback_by_session.get(session_id, False)
+        previous_on_fallback = _previous_fallback_state_by_session.get(session_id)
+        notice = fallback_transition_text(
+            previous_on_fallback=previous_on_fallback,
+            current_on_fallback=current_on_fallback,
+            model=context.get("model") or "",
+        )
+        _previous_fallback_state_by_session[session_id] = current_on_fallback
+        if notice is not None:
+            current = f"{current}\n\n{notice}"
+            changed = True
 
     return current if changed else None
 
