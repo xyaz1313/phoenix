@@ -42,7 +42,13 @@ if [ -d "$TARGET_DIR" ]; then
       fi
     done
   fi
-  BACKUP_DIR="${TARGET_DIR}.backup.$(date +%Y%m%d%H%M%S)"
+  # 备份必须放在 plugins/ 目录之外——Hermes 的插件扫描器按 plugin.yaml 里的
+  # name 字段识别插件，不管目录叫什么名字，放在 plugins/phoenix_v7.backup.*
+  # 这种同级路径下会被当成另一个同名插件加载，实测会顶替掉真正的安装（新版本
+  # 代码从此再也不会被执行，且没有任何报错提示），所以放到 plugins/ 外层。
+  BACKUP_ROOT="$HERMES_DIR/phoenix_v7_backups"
+  mkdir -p "$BACKUP_ROOT"
+  BACKUP_DIR="$BACKUP_ROOT/phoenix_v7.backup.$(date +%Y%m%d%H%M%S)"
   echo "⚠️  检测到已安装的旧版本，备份到：$BACKUP_DIR"
   mv "$TARGET_DIR" "$BACKUP_DIR"
 fi

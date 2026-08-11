@@ -120,7 +120,14 @@ if (-not $Migrate) {
     Write-Host "========================"
 
     if (Test-Path $TargetDir) {
-        $BackupDir = "$TargetDir.backup.$(Get-Date -Format 'yyyyMMddHHmmss')"
+        # 备份必须放在 plugins/ 目录之外——Hermes 的插件扫描器按 plugin.yaml
+        # 里的 name 字段识别插件，不管目录叫什么名字，放在
+        # plugins/phoenix_v7.backup.* 这种同级路径下会被当成另一个同名插件
+        # 加载，实测会顶替掉真正的安装（新版本代码从此再也不会被执行，且没有
+        # 任何报错提示），所以放到 plugins/ 外层。
+        $BackupRoot = Join-Path $HermesDir "phoenix_v7_backups"
+        New-Item -ItemType Directory -Force -Path $BackupRoot | Out-Null
+        $BackupDir = Join-Path $BackupRoot "phoenix_v7.backup.$(Get-Date -Format 'yyyyMMddHHmmss')"
         Write-Host "⚠️  检测到已安装的旧版本，备份到：$BackupDir"
         Move-Item $TargetDir $BackupDir
     }
@@ -240,9 +247,12 @@ try {
         }
     }
 
-    # 5. 备份旧插件目录，复制新版本
+    # 5. 备份旧插件目录，复制新版本（备份路径必须在 plugins/ 之外，理由见上面
+    #    普通安装分支的注释——同一份插件扫描器覆盖问题）
     if (Test-Path $TargetDir) {
-        $BackupDir = "$TargetDir.backup.$(Get-Date -Format 'yyyyMMddHHmmss')"
+        $BackupRoot = Join-Path $HermesDir "phoenix_v7_backups"
+        New-Item -ItemType Directory -Force -Path $BackupRoot | Out-Null
+        $BackupDir = Join-Path $BackupRoot "phoenix_v7.backup.$(Get-Date -Format 'yyyyMMddHHmmss')"
         Move-Item $TargetDir $BackupDir
         $didBackupTarget = $true
     }
