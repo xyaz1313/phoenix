@@ -2,8 +2,8 @@
 
 <img src="docs/images/cover.png" alt="不死鸟 Phoenix" width="100%">
 
-[![Version](https://img.shields.io/badge/version-7.7.1-2563EB.svg?style=flat-square)](phoenix_v7/plugin.yaml)
-[![Tests](https://img.shields.io/badge/tests-350%2F350-A3FF12.svg?style=flat-square)](phoenix_v7/tests)
+[![Version](https://img.shields.io/badge/version-7.8.0-2563EB.svg?style=flat-square)](phoenix_v7/plugin.yaml)
+[![Tests](https://img.shields.io/badge/tests-381%2F381-A3FF12.svg?style=flat-square)](phoenix_v7/tests)
 [![License](https://img.shields.io/badge/license-CC%20BY--NC%204.0-16A34A.svg?style=flat-square)](LICENSE)
 
 > 装在 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 上的插件。路由分档、风险防线、自愈系统，全程官方插件钩子接入，不改 Hermes 一行核心代码。
@@ -61,6 +61,13 @@ hermes phoenix-router off  # 关闭：只判断档位，不切换模型（默认
 
 Hermes 升级后如果出问题，用 `/phoenix-upgrade-log` 看版本变化历史和自动归档的异常记录（升级瞬间会自动备份 `config.yaml`，路径也在这条命令的输出里）。
 
+不死鸟会顺手记住对话里的信息，独立于 Hermes 原生记忆，检索命中才会用到（不是每次都塞进上下文）。管理这个记忆库：
+
+```text
+/phoenix-memory forget <关键词>   # 删掉匹配的记忆，比如记错了手机号
+/phoenix-memory clear confirm     # 清空整个记忆库重新开始
+```
+
 长任务场景直接用 Hermes 原生命令，不死鸟自动接管清单强制和高危复核：
 
 ```text
@@ -87,8 +94,9 @@ Hermes 升级后如果出问题，用 `/phoenix-upgrade-log` 看版本变化历�
 | Upgrade Watch 升级安全网 | Hermes升级后排查更容易 | 检测版本变化自动备份config.yaml，30分钟窗口内异常自动归档到`/phoenix-upgrade-log` |
 | Context Watch 上下文体量提醒 | 上下文变大时提前预警 | prompt_tokens过粗粒度警戒线时事后提醒，建议开新会话，同会话仅提醒一次 |
 | Fallback Watch 兜底状态透明提醒 | 主力/兜底模型自动切换时让你看得见 | Hermes原生自动切兜底、自动探测恢复，不死鸟只在状态真的变化时提醒一句，不刷屏 |
+| Memory 分层记忆 | 独立于Hermes原生MEMORY.md的补充记忆层 | 三层置信度(观察/信念/事实)按时间衰减+反复提及自动强化，检索注入前过威胁扫描，`/phoenix-memory forget\|clear`管理 |
 
-350 个自动化测试全程跟着功能走，在没有旧 `.hermes` 目录的干净环境下也能跑（`HERMES_AGENT_SRC` 显式指定 hermes-agent 源码位置即可，见 `phoenix_v7/tests/conftest.py`）。完整技术拆解见 [不死鸟 Phoenix 完整技术文档](phoenix_v7/docs/)。
+381 个自动化测试全程跟着功能走，在没有旧 `.hermes` 目录的干净环境下也能跑（`HERMES_AGENT_SRC` 显式指定 hermes-agent 源码位置即可，见 `phoenix_v7/tests/conftest.py`）。完整技术拆解见 [不死鸟 Phoenix 完整技术文档](phoenix_v7/docs/)。
 
 ## 视觉总览
 
@@ -172,11 +180,12 @@ phoenix/
 ├── phoenix_v7/          # 插件本体，会被复制到 Hermes Home 下的 plugins/ 目录
 │   ├── router/           # 路由分档引擎
 │   ├── guardrails/        # 熔断器/审批闸/成本记账/审计外发/升级安全网/上下文提醒
+│   ├── memory/             # 分层记忆(置信度衰减/强化+威胁扫描+SQLite存储)
 │   ├── selfheal/          # 抗体库
 │   ├── loop/              # 长任务守护信号
 │   ├── verify/            # 幻觉核验
 │   ├── privacy/            # 隐私敏感词检测与本地模型切换提醒
-│   ├── tests/              # 350 个自动化测试
+│   ├── tests/              # 381 个自动化测试
 │   ├── docs/                # 使用指南
 │   └── plugin.yaml          # 插件声明 + Hermes 版本兼容性字段
 ├── install.sh            # macOS / Linux 安装脚本
@@ -186,7 +195,7 @@ phoenix/
 
 ## 为什么值得信任
 
-- 350 条自动化测试全程跟着功能走，每次改动都要求全绿才能合并；在没有旧 `.hermes` 目录的干净环境下同样能跑
+- 381 条自动化测试全程跟着功能走，每次改动都要求全绿才能合并；在没有旧 `.hermes` 目录的干净环境下同样能跑
 - 至少三次真实生产事故驱动了关键安全设计（详见完整技术文档）
 - 两次重大重构都是先发现"自己重复造了 Hermes 已有的轮子"，再主动改用官方原生机制，不硬撑自建版本
 - 发布前主动加了版本兼容性自检机制，不指望用户自己去猜"这个版本能不能用"
