@@ -66,6 +66,14 @@ _current_provider_by_session: dict[str, str] = {}
 # 包括早退路径，避免 transform_llm_output 侧读到陈旧值）。
 _privacy_flagged_by_session: dict[str, bool] = {}
 
+# session_id -> (钉住的模型, 钉住时的 provider)。会话粘滞（"只升不降"）：session 一旦
+# 因高档位（如 l2_deep/l3_critical）被路由切到重模型，本会话后续请求保持该模型，即使
+# classify() 把后面的消息判回低档位。原因：本地 26B 的"秒回"完全依赖 server 端 prefix
+# 缓存，3B/26B 乒乓会让 26B 每次被切回来都是冷 prefix（2026-08-06 实测首轮 prefill
+# 约 60s vs 缓存命中 3s）。钉住时记录 provider 是因为 _route() 只被允许在同 provider
+# 内切换（2026-08-05 安全阀），换 provider 后钉子必须失效。
+_pinned_route_by_session: dict[str, tuple[str, str]] = {}
+
 # 已经提醒过隐私切换的 session 集合，避免同一会话反复提醒（见 Task 4）。
 _privacy_warned_sessions: set[str] = set()
 
@@ -217,6 +225,21 @@ def _route(request: dict, **context) -> dict | None:
                         new_model, candidate_provider, current_provider or "(缺失)", default_model,
                     )
                     new_model = default_model
+            # 会话粘滞（只升不降）：本档位成功切到重模型 → 钉住；本档位落回默认模型
+            # 且 session 有同 provider 的钉子 → 拔钉沿用，防 3B/26B 乒乓打死 26B 的
+            # prefix 缓存。钉子在 routing 关闭、provider 变更时自然失效（不参与判断）。
+            if session_id:
+                if new_model != default_model:
+                    _pinned_route_by_session[session_id] = (new_model, current_provider)
+                else:
+                    pin = _pinned_route_by_session.get(session_id)
+                    if pin is not None and pin[1] == current_provider and pin[0] != default_model:
+                        new_model = pin[0]
+                        logger.info(
+                            "phoenix_v7 router: session 已升级到 %s，保持粘滞"
+                            "（本轮 tier=%s 落回默认，防 prefix 缓存乒乓失效）",
+                            pin[0], tier,
+                        )
         if session_id:
             _resolved_model_by_session[session_id] = new_model
 

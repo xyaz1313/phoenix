@@ -228,3 +228,80 @@ def test_route_legacy_string_format_no_longer_rewrites_without_provider(monkeypa
     result = phoenix_v7._route(request, session_id="test-legacy-format", provider="some-provider")
     assert result is None
     assert phoenix_v7._resolved_model_by_session["test-legacy-format"] == "default-model"
+
+
+# ==================== 会话粘滞（只升不降，2026-08-06） ====================
+# 背景：本地 26B 的"秒回"依赖 server 端 prefix 缓存（命中时 3s vs 冷启动 60s）。
+# 若 classify() 把同 session 的消息判成低档位就切回 3B，26B 下次被切回来就是
+# 冷 prefix——乒乓一次，秒回体验全毁。规则：session 内一旦升到重模型就保持。
+
+def test_session_pin_keeps_heavy_model_when_followup_tier_drops(monkeypatch):
+    monkeypatch.setattr(phoenix_v7, "_primary_provider", "turbofieldfare")
+    monkeypatch.setattr(
+        phoenix_v7, "load_tier_overrides",
+        lambda: (True, {"l2_deep": {"model": "local-26b", "provider": "turbofieldfare"}}),
+    )
+    phoenix_v7._pinned_route_by_session.clear()
+    heavy = {
+        "model": "local-3b",
+        "messages": [{"role": "user", "content": "帮我设计一个分布式系统的一致性方案"}],
+    }
+    r1 = phoenix_v7._route(heavy, session_id="test-pin-1", provider="turbofieldfare")
+    assert r1 is not None and r1["request"]["model"] == "local-26b"
+    assert phoenix_v7._pinned_route_by_session["test-pin-1"] == ("local-26b", "turbofieldfare")
+
+    # 同 session 跟进一条极短消息（l0_fast，无档位配置，本该落回默认 local-3b）
+    light = {"model": "local-3b", "messages": [{"role": "user", "content": "在吗"}]}
+    r2 = phoenix_v7._route(light, session_id="test-pin-1", provider="turbofieldfare")
+    assert r2 is not None
+    assert r2["request"]["model"] == "local-26b"  # 粘滞保持，不降回 3B
+
+
+def test_session_pin_not_applied_after_provider_change(monkeypatch):
+    # 钉子里记录的 provider 跟当前请求不一致时必须失效——安全阀的同一原则：
+    # 不能把模型发去别的 provider 端点。
+    monkeypatch.setattr(phoenix_v7, "_primary_provider", "turbofieldfare")
+    monkeypatch.setattr(
+        phoenix_v7, "load_tier_overrides",
+        lambda: (True, {"l2_deep": {"model": "local-26b", "provider": "turbofieldfare"}}),
+    )
+    phoenix_v7._pinned_route_by_session.clear()
+    heavy = {
+        "model": "local-3b",
+        "messages": [{"role": "user", "content": "帮我设计一个分布式系统的一致性方案"}],
+    }
+    phoenix_v7._route(heavy, session_id="test-pin-2", provider="turbofieldfare")
+    assert phoenix_v7._pinned_route_by_session.get("test-pin-2") == ("local-26b", "turbofieldfare")
+
+    # 用户手动切去了别的 provider（此时也不在主线路上，routing 整体跳过）
+    light = {"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "在吗"}]}
+    r = phoenix_v7._route(light, session_id="test-pin-2", provider="custom:gaccode-claude")
+    assert r is None  # 早退，粘滞不插手
+
+
+def test_session_pin_not_set_when_routing_disabled(monkeypatch):
+    monkeypatch.setattr(phoenix_v7, "load_tier_overrides", lambda: (False, {}))
+    phoenix_v7._pinned_route_by_session.clear()
+    heavy = {
+        "model": "local-3b",
+        "messages": [{"role": "user", "content": "帮我设计一个分布式系统的一致性方案"}],
+    }
+    phoenix_v7._route(heavy, session_id="test-pin-3", provider="turbofieldfare")
+    assert "test-pin-3" not in phoenix_v7._pinned_route_by_session
+
+
+def test_session_pin_not_set_when_provider_unconfirmed(monkeypatch):
+    # 候选归属无法确认（旧 string 格式）→ 切换没发生 → 不该留下钉子，
+    # 否则后续请求会被一个"从未真正生效过的切换"粘住。
+    monkeypatch.setattr(phoenix_v7, "_primary_provider", "turbofieldfare")
+    monkeypatch.setattr(
+        phoenix_v7, "load_tier_overrides", lambda: (True, {"l2_deep": "local-26b"})
+    )
+    phoenix_v7._pinned_route_by_session.clear()
+    heavy = {
+        "model": "local-3b",
+        "messages": [{"role": "user", "content": "帮我设计一个分布式系统的一致性方案"}],
+    }
+    r = phoenix_v7._route(heavy, session_id="test-pin-4", provider="turbofieldfare")
+    assert r is None
+    assert "test-pin-4" not in phoenix_v7._pinned_route_by_session

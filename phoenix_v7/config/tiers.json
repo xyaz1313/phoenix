@@ -1,4 +1,7 @@
 {
   "enabled": false,
-  "tiers": {}
+  "tiers": {
+    "l2_deep": {"model": "local-26b", "provider": "turbofieldfare"},
+    "l3_critical": {"model": "local-26b", "provider": "turbofieldfare"}
+  }
 }

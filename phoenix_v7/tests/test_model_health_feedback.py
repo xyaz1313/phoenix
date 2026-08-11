@@ -68,8 +68,11 @@ def test_route_records_resolved_model_when_routing_disabled(monkeypatch):
     assert phoenix_v7._resolved_model_by_session["s-disabled"] == "default-model"
 
 def test_route_refreshes_stale_entry_on_later_lower_tier_call(monkeypatch):
-    # 同一个session先在高档位被换过模型，下一轮掉回没有override的档位——
-    # 记录必须刷新成这一轮真正用的模型，不能沿用上一轮的旧值。
+    # 2026-08-06 行为变更（会话粘滞）：同一个session先在高档位被换过模型后，
+    # 下一轮掉回没有override的档位时，路由会"只升不降"地保持重模型——防本地26B的
+    # prefix缓存被3B/26B乒乓打死（命中3s vs 冷启动60s，实测）。所以这里的期望值从
+    # "刷新回default-model"改成"保持smart-model"——注意这并没有违背本测试的初衷
+    # "记录必须是这一轮真正用的模型"：粘滞机制下这一轮真正用的恰恰还是smart-model。
     monkeypatch.setattr(phoenix_v7, "_primary_provider", "nous")
     monkeypatch.setattr(
         phoenix_v7, "load_tier_overrides",
@@ -77,6 +80,7 @@ def test_route_refreshes_stale_entry_on_later_lower_tier_call(monkeypatch):
     )
     phoenix_v7._last_tier_by_session.clear()
     phoenix_v7._resolved_model_by_session.clear()
+    phoenix_v7._pinned_route_by_session.clear()
     phoenix_v7._route(
         {"model": "default-model", "messages": [{"role": "user", "content": "帮我设计一个分布式系统的一致性方案"}]},
         session_id="s-refresh", provider="nous",
@@ -87,7 +91,8 @@ def test_route_refreshes_stale_entry_on_later_lower_tier_call(monkeypatch):
         {"model": "default-model", "messages": [{"role": "user", "content": "在吗"}]},
         session_id="s-refresh", provider="nous",
     )
-    assert phoenix_v7._resolved_model_by_session["s-refresh"] == "default-model"
+    # 会话粘滞：本轮仍走 smart-model（这是本轮真实使用的模型，健康记账记它名下是对的）
+    assert phoenix_v7._resolved_model_by_session["s-refresh"] == "smart-model"
 
 def test_record_usage_prefers_resolved_model_over_stale_context_model(monkeypatch):
     spy = _SpyHealth()
