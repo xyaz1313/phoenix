@@ -10,6 +10,7 @@ def _reset_state():
     phoenix_v7._privacy_warned_sessions.clear()
     phoenix_v7._on_fallback_by_session.clear()
     phoenix_v7._previous_fallback_state_by_session.clear()
+    phoenix_v7._pending_memory_write_by_session.clear()
 
 # ---- _check_privacy_warning 单独测试 ----
 
@@ -202,6 +203,38 @@ def test_transform_output_no_fallback_notice_when_state_unchanged(monkeypatch):
         response_text="正常回复", session_id="s-fb3", model="z-ai/glm-5.2",
     )
     assert result is None
+
+
+def test_transform_output_writes_memory_after_turn(monkeypatch, tmp_path):
+    _reset_state()
+    memory_db = tmp_path / "memory.db"
+    monkeypatch.setattr(phoenix_v7, "_memory_db_path", memory_db)
+    phoenix_v7._last_tier_by_session["s-mem1"] = "l1_daily"
+    phoenix_v7._privacy_flagged_by_session["s-mem1"] = False
+    phoenix_v7._current_provider_by_session["s-mem1"] = "nous"
+    phoenix_v7._pending_memory_write_by_session["s-mem1"] = "我喜欢喝手冲咖啡"
+
+    phoenix_v7._transform_output(response_text="好的记住了", session_id="s-mem1", model="z-ai/glm-5.2")
+
+    from phoenix_v7.memory.store import search_memories
+    results = search_memories(memory_db, "手冲咖啡")
+    assert len(results) == 1
+
+
+def test_transform_output_skips_trivial_prompt_write(monkeypatch, tmp_path):
+    _reset_state()
+    memory_db = tmp_path / "memory.db"
+    monkeypatch.setattr(phoenix_v7, "_memory_db_path", memory_db)
+    phoenix_v7._last_tier_by_session["s-mem2"] = "l0_fast"
+    phoenix_v7._privacy_flagged_by_session["s-mem2"] = False
+    phoenix_v7._current_provider_by_session["s-mem2"] = "nous"
+    phoenix_v7._pending_memory_write_by_session["s-mem2"] = "谢谢"
+
+    phoenix_v7._transform_output(response_text="不客气", session_id="s-mem2", model="z-ai/glm-5.2")
+
+    from phoenix_v7.memory.store import search_memories
+    results = search_memories(memory_db, "谢谢")
+    assert results == []
 
 
 def test_record_usage_tracks_prompt_tokens():

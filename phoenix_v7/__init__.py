@@ -41,6 +41,15 @@ from .guardrails.upgrade_watch import (
 )
 from .guardrails.context_watch import should_warn_context_size, context_size_warning_text
 from .guardrails.fallback_watch import fallback_transition_text
+from .memory.store import (
+    search_memories as _search_memories,
+    write_memory as _write_memory,
+    forget_matching as _forget_memories_matching,
+    clear_all as _clear_all_memories,
+    stats as _memory_stats,
+)
+from .memory.threat_scan import contains_threat_pattern
+from agent.memory_provider import is_trivial_prompt
 from .privacy.keywords import detect_sensitive
 from .privacy.warning import PRIVACY_WARNING_TEXT, append_privacy_warning  # noqa: F401 (PRIVACY_WARNING_TEXT re-exported for tests)
 from agent.auxiliary_client import get_text_auxiliary_client
@@ -120,6 +129,12 @@ _error_processor = ErrorProcessor(antibody=_antibody)
 _pending_loop_approvals: dict[str, bool] = {}
 
 _focus_mode_path: Path | None = None  # 测试用 monkeypatch 覆盖默认路径，生产环境保持 None 用默认路径
+
+_memory_db_path: Path | None = None  # 测试用 monkeypatch 覆盖默认路径，生产环境保持 None 用默认路径
+
+# session_id -> 这一轮用户消息文本，_route() 写入、_transform_output() 消费后写进
+# 记忆库——两个钩子分别看得到请求和响应，配对写入需要靠这份缓存传递。
+_pending_memory_write_by_session: dict[str, str] = {}
 
 # session_id -> 本session连续弹出"需要确认"提示的次数（真的弹出才计数，
 # 被信任/专注模式放行的不算）。达到3次时提醒一次可以开专注模式，之后不重复。
@@ -264,6 +279,34 @@ def _read_verified_hermes_version(path: Path | None = None) -> str | None:
     return version if isinstance(version, str) else None
 
 
+def _resolve_memory_db_path() -> Path:
+    if _memory_db_path is not None:
+        return _memory_db_path
+    return _STATE_DIR / "memory.db"
+
+
+def _latest_user_message(messages: list[dict]) -> str:
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            content = msg.get("content", "")
+            return content if isinstance(content, str) else ""
+    return ""
+
+
+# Hermes 官方 is_trivial_prompt() 的判定词表是纯英文（yes/no/thanks/ok...），不认识
+# 中文打招呼/确认词——对不死鸟这种中文优先的产品，直接复用会漏过"谢谢""好的"这类
+# 无语义轮次。补一个轻量中文判定，两边任一命中都算 trivial，跳过记忆写入。
+_CHINESE_TRIVIAL_WORDS = frozenset({
+    "谢谢", "谢了", "多谢", "好的", "好", "嗯", "嗯嗯", "收到", "了解", "明白",
+    "知道了", "可以", "行", "对", "是的", "没问题", "OK", "ok", "okay",
+})
+
+
+def _is_trivial_chinese_prompt(text: str) -> bool:
+    stripped = text.strip().strip("！!。.？?~～ ")
+    return stripped in _CHINESE_TRIVIAL_WORDS
+
+
 def _route(request: dict, **context) -> dict | None:
     current_provider = context.get("provider") or ""
     current_base_url = context.get("base_url") or ""
@@ -272,6 +315,9 @@ def _route(request: dict, **context) -> dict | None:
     if session_id:
         _current_provider_by_session[session_id] = current_provider
         _privacy_flagged_by_session[session_id] = detect_sensitive(messages)
+        user_text = _latest_user_message(messages)
+        if user_text:
+            _pending_memory_write_by_session[session_id] = user_text
 
     default_model = request.get("model", "")
     # 已经在 Hermes 的备用线路上时，不死鸟不插手模型选择——tier 判定/_last_tier_by_session
@@ -360,6 +406,24 @@ def _route(request: dict, **context) -> dict | None:
             new_request["stream"] = False
             logger.info("phoenix_v7 local-guard: 强制 turbofieldfare 请求 stream=False")
             changed = True
+
+    if session_id and messages:
+        latest_user_text = _latest_user_message(messages)
+        if latest_user_text:
+            recalled = _search_memories(_resolve_memory_db_path(), latest_user_text, limit=5)
+            safe_snippets = []
+            for item in recalled:
+                is_threat, _label = contains_threat_pattern(item["content"])
+                if not is_threat:
+                    safe_snippets.append(item["content"])
+            if safe_snippets:
+                memory_block = "（不死鸟记忆库相关内容，供参考）\n" + "\n".join(
+                    f"- {s}" for s in safe_snippets
+                )
+                new_request["messages"] = [
+                    {"role": "system", "content": memory_block}
+                ] + list(new_request.get("messages", messages))
+                changed = True
 
     if not changed:
         return None  # 没变化就不用返回替换，减少 trace 噪音
@@ -580,6 +644,15 @@ def _transform_output(**context) -> str | None:
         if notice is not None:
             current = f"{current}\n\n{notice}"
             changed = True
+
+    if session_id:
+        pending_text = _pending_memory_write_by_session.pop(session_id, "")
+        if (
+            pending_text
+            and not is_trivial_prompt(pending_text)
+            and not _is_trivial_chinese_prompt(pending_text)
+        ):
+            _write_memory(_resolve_memory_db_path(), pending_text, session_id)
 
     return current if changed else None
 
