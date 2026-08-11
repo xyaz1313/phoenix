@@ -201,3 +201,79 @@ def test_subagent_own_route_overrides_inherited_tier(monkeypatch):
     request = {"model": "default-model", "messages": [{"role": "user", "content": "在吗"}]}
     phoenix_v7._route(request, session_id="child-4")
     assert phoenix_v7._last_tier_by_session["child-4"] == "l0_quick"
+
+
+def test_guard_tool_skips_approval_when_focus_mode_on(monkeypatch, tmp_path):
+    focus_path = tmp_path / "focus_mode.json"
+    phoenix_v7.set_focus_mode(True, path=focus_path)
+    monkeypatch.setattr(phoenix_v7, "_focus_mode_path", focus_path)
+    monkeypatch.setattr(phoenix_v7, "is_checkpoints_enabled", lambda: True)
+    phoenix_v7._last_tier_by_session.clear()
+    phoenix_v7._last_tier_by_session["sess-focus-1"] = "l2_deep"
+    result = phoenix_v7._guard_tool("write_file", {"path": "/tmp/x.py"}, session_id="sess-focus-1")
+    assert result is None
+
+
+def test_guard_tool_still_prompts_when_focus_mode_off(monkeypatch, tmp_path):
+    focus_path = tmp_path / "focus_mode.json"
+    monkeypatch.setattr(phoenix_v7, "_focus_mode_path", focus_path)
+    monkeypatch.setattr(phoenix_v7, "is_checkpoints_enabled", lambda: True)
+    phoenix_v7._last_tier_by_session.clear()
+    phoenix_v7._last_tier_by_session["sess-focus-2"] = "l2_deep"
+    result = phoenix_v7._guard_tool("write_file", {"path": "/tmp/x.py"}, session_id="sess-focus-2")
+    assert result is not None
+    assert result["action"] == "approve"
+
+
+def test_guard_tool_suggests_focus_mode_on_third_consecutive_prompt(monkeypatch, tmp_path):
+    focus_path = tmp_path / "focus_mode.json"
+    monkeypatch.setattr(phoenix_v7, "_focus_mode_path", focus_path)
+    monkeypatch.setattr(phoenix_v7, "is_checkpoints_enabled", lambda: True)
+    phoenix_v7._last_tier_by_session.clear()
+    phoenix_v7._consecutive_high_tier_prompts_by_session.clear()
+    phoenix_v7._focus_mode_suggested_sessions.clear()
+    phoenix_v7._last_tier_by_session["sess-focus-3"] = "l2_deep"
+
+    first = phoenix_v7._guard_tool("write_file", {"path": "/tmp/a.py"}, session_id="sess-focus-3")
+    second = phoenix_v7._guard_tool("write_file", {"path": "/tmp/b.py"}, session_id="sess-focus-3")
+    third = phoenix_v7._guard_tool("write_file", {"path": "/tmp/c.py"}, session_id="sess-focus-3")
+
+    assert "phoenix-focus" not in first["message"]
+    assert "phoenix-focus" not in second["message"]
+    assert "phoenix-focus" in third["message"]
+
+    fourth = phoenix_v7._guard_tool("write_file", {"path": "/tmp/d.py"}, session_id="sess-focus-3")
+    assert "phoenix-focus" not in fourth["message"]  # 一个session只提一次，不重复刷屏
+
+
+def test_focus_slash_handler_on_off_status(tmp_path, monkeypatch):
+    focus_path = tmp_path / "focus_mode.json"
+    monkeypatch.setattr(phoenix_v7, "_focus_mode_path", focus_path)
+
+    status_before = phoenix_v7._handle_focus_slash("status")
+    assert "关闭" in status_before
+
+    on_result = phoenix_v7._handle_focus_slash("on")
+    assert "开启" in on_result
+    assert phoenix_v7.is_focus_mode_enabled(path=focus_path) is True
+
+    off_result = phoenix_v7._handle_focus_slash("off")
+    assert "关闭" in off_result
+    assert phoenix_v7.is_focus_mode_enabled(path=focus_path) is False
+
+
+def test_focus_slash_handler_unknown_arg_shows_usage():
+    result = phoenix_v7._handle_focus_slash("bogus")
+    assert "on" in result and "off" in result and "status" in result
+
+
+def test_router_slash_handler_on_off_status(tmp_path, monkeypatch):
+    tiers_path = tmp_path / "tiers.json"
+    tiers_path.write_text('{"enabled": false, "tiers": {}}', encoding="utf-8")
+    monkeypatch.setattr(phoenix_v7, "_load_primary_provider", lambda: "nous")
+
+    on_result = phoenix_v7._handle_router_slash("on", path=tiers_path)
+    assert "自动挡" in on_result or "开启" in on_result
+
+    off_result = phoenix_v7._handle_router_slash("off", path=tiers_path)
+    assert "手动挡" in off_result or "关闭" in off_result

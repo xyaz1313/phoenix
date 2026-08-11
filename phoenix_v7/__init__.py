@@ -34,6 +34,7 @@ from .guardrails.checkpoint_guard import (
 )
 from .guardrails.approval_trust import is_approval_trusted, record_approval_outcome
 from .guardrails.webhook_export import send_alert
+from .guardrails.focus_mode import is_focus_mode_enabled, set_focus_mode, focus_mode_status_line
 from .privacy.keywords import detect_sensitive
 from .privacy.warning import PRIVACY_WARNING_TEXT, append_privacy_warning  # noqa: F401 (PRIVACY_WARNING_TEXT re-exported for tests)
 from agent.auxiliary_client import get_text_auxiliary_client
@@ -102,6 +103,13 @@ _error_processor = ErrorProcessor(antibody=_antibody)
 # 调用"的设计原则）。
 _pending_loop_approvals: dict[str, bool] = {}
 
+_focus_mode_path: Path | None = None  # 测试用 monkeypatch 覆盖默认路径，生产环境保持 None 用默认路径
+
+# session_id -> 本session连续弹出"需要确认"提示的次数（真的弹出才计数，
+# 被信任/专注模式放行的不算）。达到3次时提醒一次可以开专注模式，之后不重复。
+_consecutive_high_tier_prompts_by_session: dict[str, int] = {}
+_focus_mode_suggested_sessions: set[str] = set()
+
 _HERMES_CONFIG_PATH = get_hermes_home() / "config.yaml"
 
 
@@ -131,6 +139,62 @@ def _load_primary_provider(path: Path | None = None) -> str:
 
 
 _primary_provider = _load_primary_provider()
+
+
+def _load_provider_base_url(provider_name: str, path: Path | None = None) -> str | None:
+    """读取 config.yaml 里某个具名 provider 的 api 端点，用于 _providers_match()
+    在 provider 名字比不上时兜底按端点比对。读取失败/字段缺失一律返回 None，
+    调用方把 None 当"确认不了"处理。"""
+    if not provider_name:
+        return None
+    target = path or _HERMES_CONFIG_PATH
+    if not target.exists():
+        return None
+    try:
+        data = yaml.safe_load(target.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    providers_cfg = data.get("providers")
+    if not isinstance(providers_cfg, dict):
+        return None
+    provider_cfg = providers_cfg.get(provider_name)
+    if not isinstance(provider_cfg, dict):
+        return None
+    api = provider_cfg.get("api")
+    return api if isinstance(api, str) and api else None
+
+
+def _providers_match(
+    current_provider: str,
+    current_base_url: str,
+    target_provider_name: str,
+    path: Path | None = None,
+) -> bool:
+    """判断当前请求实际打的 provider 是不是 target_provider_name（config.yaml
+    里用户自己取的 provider 名，比如 "turbofieldfare"）。
+
+    2026-08-11 真机测试实测发现：Hermes 对 `transport: chat_completions` 的
+    自定义 provider，运行时传给插件 context["provider"] 的值统一被 Hermes 自己
+    归一化成字面量 "custom"，不是 config.yaml 里那个用户自己取的 provider 名——
+    直接比字符串永远对不上，_route() 的主线路判断和候选 provider 归属确认两处
+    因此全程静默失效，本地档位路由从来没有真正生效过。不是猜的，是插了调试
+    探针在真实对话里打印出来的。
+
+    current_provider 是具名 provider（不是 "custom"）时，走原来的精确字符串
+    比对——这条路径本身没问题，Hermes 内建 provider（nous/openai 等）的
+    context["provider"] 就是 config.yaml 里那个名字。只有 current_provider
+    命中 "custom" 这个歧义值时，才退化成按 base_url 精确匹配——base_url 是
+    这次请求实际打的端点，不受 Hermes 内部 provider 类型归一化影响。"""
+    if current_provider and current_provider != "custom":
+        return current_provider == target_provider_name
+    if not current_base_url:
+        return False
+    target_base_url = _load_provider_base_url(target_provider_name, path=path)
+    if not target_base_url:
+        return False
+    return current_base_url.rstrip("/") == target_base_url.rstrip("/")
 
 
 def _load_fallback_chain(path: Path | None = None) -> list[dict]:
@@ -179,6 +243,7 @@ def _read_verified_hermes_version(path: Path | None = None) -> str | None:
 
 def _route(request: dict, **context) -> dict | None:
     current_provider = context.get("provider") or ""
+    current_base_url = context.get("base_url") or ""
     session_id = context.get("session_id", "")
     messages = request.get("messages") or context.get("conversation_history") or []
     if session_id:
@@ -190,7 +255,9 @@ def _route(request: dict, **context) -> dict | None:
     # /_resolved_model_by_session 全部跳过是故意的：_guard_tool() 读不到 tier 时按
     # tier=None 处理，不会命中任何高危档位审批门槛，在降级状态下这是期望行为，不是遗漏。
     on_primary_route = not (
-        _primary_provider and current_provider and current_provider != _primary_provider
+        _primary_provider
+        and current_provider
+        and not _providers_match(current_provider, current_base_url, _primary_provider)
     )
 
     tier = None
@@ -216,7 +283,7 @@ def _route(request: dict, **context) -> dict | None:
                 provider_confirmed = (
                     candidate_provider is not None
                     and bool(current_provider)
-                    and candidate_provider == current_provider
+                    and _providers_match(current_provider, current_base_url, candidate_provider)
                 )
                 if not provider_confirmed:
                     logger.warning(
@@ -335,7 +402,21 @@ def _guard_tool(tool_name: str, args: dict, **context) -> dict | None:
     directive = _evaluate_tool_guard(
         tier, _breaker.allow(), tool_name=tool_name, is_scheduled=is_scheduled,
         is_loop_active=is_loop_active, is_hardline=is_hardline, is_trusted=is_trusted,
+        focus_mode=is_focus_mode_enabled(path=_focus_mode_path),
     )
+    if (
+        directive is not None
+        and directive.get("rule_key", "").startswith("phoenix_v7_high_tier:")
+        and session_id
+    ):
+        count = _consecutive_high_tier_prompts_by_session.get(session_id, 0) + 1
+        _consecutive_high_tier_prompts_by_session[session_id] = count
+        if count >= 3 and session_id not in _focus_mode_suggested_sessions:
+            _focus_mode_suggested_sessions.add(session_id)
+            directive["message"] += (
+                "\n\n（这是本次会话第3次高危确认——如果想专心用固定模型干活，"
+                "可以用 /phoenix-focus on 暂停这类提示）"
+            )
     if (
         directive is not None
         and directive.get("rule_key") == "phoenix_v7_loop_high_tier_needs_evaluator"
@@ -584,6 +665,7 @@ def _handle_status_cli(args) -> None:
     print(
         "phoenix_v7 状态\n"
         f"  路由: {router_status}\n"
+        f"  专注模式: {focus_mode_status_line()}\n"
         f"  熔断器: {breaker_state}\n"
         "  长任务(Loop): 用 Hermes 原生 `/goal status` 查看（不死鸟在此基础上加了"
         "清单强制+高危操作复核，见 docs/Loop长任务使用指南.md）\n"
@@ -593,6 +675,38 @@ def _handle_status_cli(args) -> None:
         f"（{antibody_stats['disabled_patterns']} 个已停用）\n"
         f"{fallback_line}"
     )
+
+
+def _handle_focus_slash(raw_args: str) -> str:
+    """/phoenix-focus on|off|status —— 开关专注模式（暂停深度/真神档确认提示）。"""
+    sub = raw_args.strip().lower().split()
+    action = sub[0] if sub else "status"
+    if action == "on":
+        set_focus_mode(True, path=_focus_mode_path)
+        return "phoenix_v7 专注模式：已开启（深度/真神档确认提示暂停，hardline永久高危命令不受影响）"
+    if action == "off":
+        set_focus_mode(False, path=_focus_mode_path)
+        return "phoenix_v7 专注模式：已关闭（高危档位确认提示恢复正常）"
+    if action == "status":
+        return f"phoenix_v7 专注模式：{focus_mode_status_line(path=_focus_mode_path)}"
+    return "用法：/phoenix-focus on | off | status"
+
+
+def _handle_router_slash(raw_args: str, path: Path | None = None) -> str:
+    """/phoenix-router on|off|status —— 开关自动路由换模型（phoenix-router终端
+    命令的斜杠命令版本，桌面端/CLI对话中都能用）。"""
+    sub = raw_args.strip().lower().split()
+    action = sub[0] if sub else "status"
+    if action == "on":
+        write_enabled(True, path=path)
+        return "phoenix_v7 自动路由：已开启（会按档位自动切换模型）"
+    if action == "off":
+        write_enabled(False, path=path)
+        return "phoenix_v7 自动路由：已关闭（只判断档位，不切换模型）"
+    if action == "status":
+        enabled, _overrides = load_tier_overrides(path=path)
+        return f"phoenix_v7 自动路由：{'自动挡' if enabled else '手动挡'}"
+    return "用法：/phoenix-router on | off | status"
 
 
 def register(ctx) -> None:
@@ -606,6 +720,14 @@ def register(ctx) -> None:
     ctx.register_hook("post_approval_response", _on_approval_response)
     ctx.register_hook("transform_llm_output", _transform_output)
     ctx.register_middleware("tool_execution", _heal)
+    ctx.register_command(
+        "phoenix-focus", handler=_handle_focus_slash,
+        description="开关专注模式（暂停深度/真神档确认提示）",
+    )
+    ctx.register_command(
+        "phoenix-router", handler=_handle_router_slash,
+        description="开关自动路由换模型（终端命令 hermes phoenix-router 的斜杠命令版）",
+    )
     ctx.register_cli_command(
         "phoenix-router",
         help="开关不死鸟自动路由换模型",
