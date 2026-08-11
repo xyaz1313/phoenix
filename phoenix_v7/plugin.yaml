@@ -1,5 +1,5 @@
 name: phoenix_v7
-version: 7.6.2
+version: 7.7.0
 verified_hermes_version: "0.20.0"
 description: "不死鸟 V7 — 路由分档/成本防线/自愈最小核心，官方钩子接入，不改Hermes核心文件"
 author: "xiaoye"
@@ -12,3 +12,4 @@ provides_hooks:
   - subagent_stop
   - transform_llm_output
   - post_approval_response
+  - on_session_start

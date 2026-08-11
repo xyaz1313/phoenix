@@ -2,7 +2,7 @@
 
 <img src="docs/images/cover.png" alt="不死鸟 Phoenix" width="100%">
 
-[![Version](https://img.shields.io/badge/version-7.6.2-2563EB.svg?style=flat-square)](phoenix_v7/plugin.yaml)
+[![Version](https://img.shields.io/badge/version-7.7.0-2563EB.svg?style=flat-square)](phoenix_v7/plugin.yaml)
 [![Tests](https://img.shields.io/badge/tests-338%2F338-A3FF12.svg?style=flat-square)](phoenix_v7/tests)
 [![License](https://img.shields.io/badge/license-CC%20BY--NC%204.0-16A34A.svg?style=flat-square)](LICENSE)
 
@@ -93,6 +93,8 @@ Hermes 升级后如果出问题，用 `/phoenix-upgrade-log` 看版本变化历�
 
 <img src="docs/images/01-router.png" alt="Router 路由分档" width="100%">
 
+<img src="docs/images/14-router-switch.png" alt="Router Switch 路由开关" width="100%">
+
 <img src="docs/images/02-guardrails.png" alt="Guardrails 风险防线" width="100%">
 
 <img src="docs/images/04-selfheal.png" alt="Selfheal 自愈系统" width="100%">
@@ -107,9 +109,13 @@ Hermes 升级后如果出问题，用 `/phoenix-upgrade-log` 看版本变化历�
 
 <img src="docs/images/10-adaptive-approval.png" alt="Adaptive Approval 审批策略自适应" width="100%">
 
+<img src="docs/images/13-focus-mode.png" alt="Focus Mode 专注模式" width="100%">
+
 <img src="docs/images/11-privacy.png" alt="Privacy 隐私路由" width="100%">
 
 <img src="docs/images/12-local-model-setup.png" alt="本地模型配置指南" width="100%">
+
+<img src="docs/images/15-upgrade-watch.png" alt="Upgrade Watch 升级安全网" width="100%">
 
 <img src="docs/images/08-comparison.png" alt="全景对比：纯 Hermes vs 不死鸟" width="100%">
 
