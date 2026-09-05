@@ -100,6 +100,14 @@ _privacy_flagged_by_session: dict[str, bool] = {}
 # 内切换（2026-08-05 安全阀），换 provider 后钉子必须失效。
 _pinned_route_by_session: dict[str, tuple[str, str]] = {}
 
+# session_id -> 剩余钉住轮次。2026-09-05 引入「钉住衰减」：一次高档位命中只强制后续
+# _PIN_DECAY_ROUNDS 轮继续用重模型，之后释放回动态路由，避免误判/长会话把整场对话
+# 永久钉在贵模型上。远程 API 没有本地 26B 的 prefix 冷启动代价，永久粘滞纯属浪费。
+# 注意：本地 turbofieldfare 场景原本靠永久粘滞保护 prefix 缓存，衰减会削弱该保护；
+# 本机 WSL/Linux 不跑本地模型，无实际影响；日后若在 macOS 启用本地 26B 需重新评估。
+_pinned_rounds_left_by_session: dict[str, int] = {}
+_PIN_DECAY_ROUNDS = 3
+
 # 已经提醒过隐私切换的 session 集合，避免同一会话反复提醒（见 Task 4）。
 _privacy_warned_sessions: set[str] = set()
 
@@ -363,21 +371,40 @@ def _route(request: dict, **context) -> dict | None:
                         new_model, candidate_provider, current_provider or "(缺失)", default_model,
                     )
                     new_model = default_model
-            # 会话粘滞（只升不降）：本档位成功切到重模型 → 钉住；本档位落回默认模型
-            # 且 session 有同 provider 的钉子 → 拔钉沿用，防 3B/26B 乒乓打死 26B 的
-            # prefix 缓存。钉子在 routing 关闭、provider 变更时自然失效（不参与判断）。
+            # 会话粘滞（钉住衰减，2026-09-05）：本档位成功切到重模型 → 钉住并重置衰减
+            # 轮次；后续低档位请求在衰减轮次内沿用重模型，超过后释放回动态路由。原「永久
+            # 只升不降」是为本地 26B 的 prefix 缓存设计（防 3B/26B 乒乓冷启动），远程 API
+            # 无此代价，永久粘滞只会把误判/长会话整体钉在贵模型上。钉子在 routing 关闭、
+            # provider 变更时自然失效（不参与判断）。
             if session_id:
+                remaining_rounds = _pinned_rounds_left_by_session.get(session_id, 0)
                 if new_model != default_model:
+                    # 本轮判到高档位：钉住，并重置衰减窗口（每次命中都刷新）
                     _pinned_route_by_session[session_id] = (new_model, current_provider)
+                    _pinned_rounds_left_by_session[session_id] = _PIN_DECAY_ROUNDS
+                    logger.info(
+                        "phoenix_v7 router: 会话 %s 因高档位被钉住（tier=%s），"
+                        "剩余钉住轮次 %d",
+                        session_id, tier, _PIN_DECAY_ROUNDS,
+                    )
                 else:
                     pin = _pinned_route_by_session.get(session_id)
                     if pin is not None and pin[1] == current_provider and pin[0] != default_model:
-                        new_model = pin[0]
-                        logger.info(
-                            "phoenix_v7 router: session 已升级到 %s，保持粘滞"
-                            "（本轮 tier=%s 落回默认，防 prefix 缓存乒乓失效）",
-                            pin[0], tier,
-                        )
+                        if remaining_rounds > 0:
+                            new_model = pin[0]
+                            _pinned_rounds_left_by_session[session_id] = remaining_rounds - 1
+                            logger.info(
+                                "phoenix_v7 router: 会话 %s 保持粘滞（剩余 %d 轮），"
+                                "使用模型 %s",
+                                session_id, remaining_rounds - 1, pin[0],
+                            )
+                        else:
+                            del _pinned_route_by_session[session_id]
+                            _pinned_rounds_left_by_session.pop(session_id, None)
+                            logger.info(
+                                "phoenix_v7 router: 会话 %s 的钉住已过期，释放回默认模型",
+                                session_id,
+                            )
         if session_id:
             _resolved_model_by_session[session_id] = new_model
 
