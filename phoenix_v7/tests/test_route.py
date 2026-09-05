@@ -322,6 +322,40 @@ def test_session_pin_not_set_when_provider_unconfirmed(monkeypatch):
     assert "test-pin-4" not in phoenix_v7._pinned_route_by_session
 
 
+def test_session_pin_decays_after_n_rounds(monkeypatch, tmp_path):
+    # 钉住衰减（2026-09-05）：一次高档位命中后，只强制后续 _PIN_DECAY_ROUNDS 轮沿用
+    # 重模型，之后释放回动态路由。远程 API 无本地 26B 的 prefix 冷启动代价，永久粘滞
+    # 只会把误判/长会话整体钉在贵模型上。
+    monkeypatch.setattr(phoenix_v7, "_primary_provider", "nous")
+    monkeypatch.setattr(
+        phoenix_v7, "load_tier_overrides",
+        lambda: (True, {"l2_deep": {"model": "smart-model", "provider": "nous"}}),
+    )
+    phoenix_v7._pinned_route_by_session.clear()
+    phoenix_v7._pinned_rounds_left_by_session.clear()
+    monkeypatch.setattr(phoenix_v7, "_memory_db_path", tmp_path / "memory.db")
+
+    heavy = {
+        "model": "default-model",
+        "messages": [{"role": "user", "content": "帮我设计一个分布式系统的一致性方案"}],
+    }
+    r = phoenix_v7._route(heavy, session_id="test-decay-1", provider="nous")
+    assert r is not None and r["request"]["model"] == "smart-model"
+    assert phoenix_v7._pinned_rounds_left_by_session["test-decay-1"] == phoenix_v7._PIN_DECAY_ROUNDS
+
+    light = {"model": "default-model", "messages": [{"role": "user", "content": "在吗"}]}
+    # 前 _PIN_DECAY_ROUNDS 轮低档跟进仍沿用重模型
+    for _ in range(phoenix_v7._PIN_DECAY_ROUNDS):
+        rr = phoenix_v7._route(light, session_id="test-decay-1", provider="nous")
+        assert rr is not None and rr["request"]["model"] == "smart-model"
+
+    # 第 _PIN_DECAY_ROUNDS+1 轮释放回默认模型，钉子与计数器一并清理
+    rr = phoenix_v7._route(light, session_id="test-decay-1", provider="nous")
+    assert rr is None
+    assert "test-decay-1" not in phoenix_v7._pinned_route_by_session
+    assert "test-decay-1" not in phoenix_v7._pinned_rounds_left_by_session
+
+
 # ==================== provider "custom" 归一化兼容（2026-08-11 真机bug修复） ====================
 # 背景：Hermes 对 transport: chat_completions 的自定义 provider，运行时传给插件
 # context["provider"] 的值统一是字面量 "custom"，不是 config.yaml 里用户自己取的
